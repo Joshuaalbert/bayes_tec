@@ -94,7 +94,9 @@ class DataPack(object):
             array_file = self.lofar_array
         labels, pos = self._load_array_file(array_file)
         antennaTable = self._solset.obj._f_get_child('antenna')
-        antennaTable.append(list(zip(*(labels,pos))))
+        for lab,p in zip(labels,pos):
+            if lab not in antennaTable.cols.name[:].astype(type(lab)):
+                antennaTable.append([(lab,p)])
 
     def add_sources(self, directions, patch_names=None):
         Nd = len(directions)
@@ -104,7 +106,9 @@ class DataPack(object):
                 patch_names.append("patch_{:03d}".format(d))
 
         sourceTable = self._solset.obj._f_get_child('source')
-        sourceTable.append(list(zip(*(np.array(patch_names).astype(np.str_), directions))))
+        for lab,p in zip(patch_names,directions):
+            if lab not in sourceTable.cols.name[:].astype(type(lab)):
+                sourceTable.append([(lab,p)])
 
     @property
     def _antennas(self):
@@ -133,7 +137,7 @@ class DataPack(object):
             dirs.append(s['dir'])
         return patch_names, dirs
     
-    def add_freq_indep_tab(self, name, times, pols = None, ants = None, dirs = None, phase=None):
+    def add_freq_indep_tab(self, name, times, pols = None, ants = None, dirs = None, vals=None):
         with self:
             #pols = ['XX','XY','YX','YY']
             if dirs is None:
@@ -146,18 +150,18 @@ class DataPack(object):
             Na = len(ants)
             Nt = len(times)
             if pols is not None:
-                if phase is None:
+                if vals is None:
                     phase = np.zeros([Npol,Nd,Na,Nt])
                 self._solset.makeSoltab(name, axesNames=['pol','dir','ant','time'],
-                        axesVals=[pols, dirs, ants, times],vals=phase, weights=np.ones_like(phase))
+                        axesVals=[pols, dirs, ants, times],vals=vals, weights=np.ones_like(vals))
             else:
-                if phase is None:
+                if vals is None:
                     phase = np.zeros([Nd,Na,Nt])
                 self._solset.makeSoltab(name, axesNames=['dir','ant','time'],
-                        axesVals=[dirs, ants, times],vals=phase, weights=np.ones_like(phase))
+                        axesVals=[dirs, ants, times],vals=vals, weights=np.ones_like(vals))
     
 
-    def add_freq_dep_tab(self, name, times, freqs, pols = None, ants = None, dirs = None, phase=None):
+    def add_freq_dep_tab(self, name, times, freqs, pols = None, ants = None, dirs = None, vals=None):
         with self:
             #pols = ['XX','XY','YX','YY']
             if dirs is None:
@@ -171,15 +175,15 @@ class DataPack(object):
             Nt = len(times)
             Nf = len(freqs)
             if pols is not None:
-                if phase is None:
-                    phase = np.zeros([Npol,Nd,Na,Nf,Nt])
+                if vals is None:
+                    vals = np.zeros([Npol,Nd,Na,Nf,Nt])
                 self._solset.makeSoltab(name, axesNames=['pol','dir','ant','freq','time'],
-                        axesVals=[pols, dirs, ants, freqs, times],vals=phase, weights=np.ones_like(phase))
+                        axesVals=[pols, dirs, ants, freqs, times],vals=vals, weights=np.ones_like(vals))
             else:
-                if phase is None:
-                    phase = np.zeros([Nd,Na,Nf,Nt])
+                if vals is None:
+                    vals = np.zeros([Nd,Na,Nf,Nt])
                 self._solset.makeSoltab(name, axesNames=['dir','ant','freq','time'],
-                        axesVals=[dirs, ants, freqs, times],vals=phase, weights=np.ones_like(phase))
+                        axesVals=[dirs, ants, freqs, times],vals=vals, weights=np.ones_like(vals))
     
     def __getattr__(self, tab):
         """
