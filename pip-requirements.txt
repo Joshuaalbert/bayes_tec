@@ -1,0 +1,14 @@
+numpy
+gpflow
+tensorflow
+h5py
+matplotlib
+jupyter
+notebook
+ipython
+scipy
+scikit-optimize
+scikit-learn
+pandas
+tables
+cython
