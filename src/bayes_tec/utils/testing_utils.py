@@ -7,7 +7,7 @@ def make_example_datapack(Nd,Nf,Nt,time_corr=50.,tec_scale=0.01,name='test.hdf5'
     with datapack:
         datapack.add_antennas()
 
-        datapack.add_sources(np.random.normal(0,np.pi/180.*2.5,size=[Nd,2]))
+        datapack.add_sources(np.random.normal(np.pi/4.,np.pi/180.*2.5,size=[Nd,2]))
         times = np.linspace(-Nt*4,Nt*4,Nt)
         freqs = np.linspace(120,160,Nf)*1e6
 

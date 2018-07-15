@@ -44,6 +44,10 @@ class DataPack(object):
                 self.H = None
             self._contexts_open -= 1
 
+    def __repr__(self):
+        with self:
+            return str(self.H)
+
     @property
     def _solset(self):
         with self:
@@ -93,10 +97,11 @@ class DataPack(object):
         if array_file is None:
             array_file = self.lofar_array
         labels, pos = self._load_array_file(array_file)
-        antennaTable = self._solset.obj._f_get_child('antenna')
-        for lab,p in zip(labels,pos):
-            if lab not in antennaTable.cols.name[:].astype(type(lab)):
-                antennaTable.append([(lab,p)])
+        with self:
+            antennaTable = self._solset.obj._f_get_child('antenna')
+            for lab,p in zip(labels,pos):
+                if lab not in antennaTable.cols.name[:].astype(type(lab)):
+                    antennaTable.append([(lab,p)])
 
     def add_sources(self, directions, patch_names=None):
         Nd = len(directions)
@@ -104,11 +109,11 @@ class DataPack(object):
             patch_names = []
             for d in range(Nd):
                 patch_names.append("patch_{:03d}".format(d))
-
-        sourceTable = self._solset.obj._f_get_child('source')
-        for lab,p in zip(patch_names,directions):
-            if lab not in sourceTable.cols.name[:].astype(type(lab)):
-                sourceTable.append([(lab,p)])
+        with self:
+            sourceTable = self._solset.obj._f_get_child('source')
+            for lab,p in zip(patch_names,directions):
+                if lab not in sourceTable.cols.name[:].astype(type(lab)):
+                    sourceTable.append([(lab,p)])
 
     @property
     def _antennas(self):
@@ -117,11 +122,36 @@ class DataPack(object):
         
     @property
     def antennas(self):
-        antenna_labels, pos = [],[]
-        for a in self._antennas:
-            antenna_labels.append(a['name'])
-            pos.append(a['position'])
-        return antenna_labels, pos
+        with self:
+            antenna_labels, pos = [],[]
+            for a in self._antennas:
+                antenna_labels.append(a['name'])
+                pos.append(a['position'])
+            return np.array(antenna_labels), np.stack(pos,axis=0)
+
+    @property
+    def ref_ant(self):
+        with self:
+            antenna_labels, antennas = self.antennas
+            return antenna_labels[0]
+
+    @property
+    def array_center(self):
+        with self:
+            _, antennas = self.get_antennas(None)
+            center = np.mean(self.locs.cartesian.xyz,axis=1)
+            center = ac.SkyCoord(x=center[0],y=center[1],z=center[2],frame='itrs')
+            return center
+
+    def get_antennas(self,ants):
+        with self:
+            antenna_labels, antennas = self.antennas
+            if ants is None:
+                ant_idx = slice(None)
+            else:
+                ant_idx = np.searchsorted(antenna_labels, ants)
+            antennas = antennas[ant_idx]
+            return antenna_labels[ant_idx], ac.SkyCoord(antennas[:,0]*au.m,antennas[:,1]*au.m,antennas[:,2]*au.m,frame='itrs')
 
     @property
     def _sources(self):
@@ -130,15 +160,45 @@ class DataPack(object):
         
     @property
     def sources(self):
-        patch_names = []
-        dirs = []
-        for s in self._sources:
-            patch_names.append(s['name'])
-            dirs.append(s['dir'])
-        return patch_names, dirs
+        with self:
+            patch_names = []
+            dirs = []
+            for s in self._sources:
+                patch_names.append(s['name'])
+                dirs.append(s['dir'])
+            return np.array(patch_names), np.stack(dirs,axis=0)
+
+    def get_sources(self,dirs):
+        with self:
+            patch_names, directions = self.sources
+            if dirs is None:
+                dir_idx = slice(None)
+            else:
+                dir_idx = np.searchsorted(patch_names, dirs)
+            directions = directions[dir_idx]
+            return patch_names[dir_idx], ac.SkyCoord(directions[:,0]*au.rad, directions[:,1]*au.rad,frame='icrs')
+    @property
+    def pointing_center(self):
+        with self:
+            _, directions = self.get_sources(None)
+            ra_mean = np.mean(directions.transform_to('icrs').ra)
+            dec_mean = np.mean(directions.transform_to('icrs').dec)
+            dir = ac.SkyCoord(ra_mean,dec_mean,frame='icrs')
+            return dir
+
+    def get_times(self,times):
+        times = at.Time(times/86400.,format='mjd')
+        return times.isot, times
+
+    def get_freqs(self,freqs):
+        labs = ['{:.1f}MHz'.format(f/1e6) for f in freqs]
+        return np.array(labs), freqs
     
     def add_freq_indep_tab(self, name, times, pols = None, ants = None, dirs = None, vals=None):
         with self:
+            if "{}000".format(name) in self._solset.getSoltabNames():
+                logging.warning("{}000 is already a tab in {}".format(name,self.solset))
+                return
             #pols = ['XX','XY','YX','YY']
             if dirs is None:
                 dirs,_ = self.sources
@@ -163,6 +223,9 @@ class DataPack(object):
 
     def add_freq_dep_tab(self, name, times, freqs, pols = None, ants = None, dirs = None, vals=None):
         with self:
+            if "{}000".format(name) in self._solset.getSoltabNames():
+                logging.warning("{}000 is already a tab in {}".format(name,self.solset))
+                return
             #pols = ['XX','XY','YX','YY']
             if dirs is None:
                 dirs,_ = self.sources
@@ -184,7 +247,6 @@ class DataPack(object):
                     vals = np.zeros([Nd,Na,Nf,Nt])
                 self._solset.makeSoltab(name, axesNames=['dir','ant','freq','time'],
                         axesVals=[dirs, ants, freqs, times],vals=vals, weights=np.ones_like(vals))
-    
     def __getattr__(self, tab):
         """
         Links any attribute with an "axis name" to getValuesAxis("axis name")
@@ -194,23 +256,20 @@ class DataPack(object):
         axis : str
             The axis name.
         """
-        if tab == 'phase':
+        if tab in ['phase','amplitude','tec','variance_phase','variance_amplitude','variance_tec']:
             with self:
-                return self._solset.getSoltab('phase000')
-        elif tab == 'amplitude':
-            with self:
-                return self._solset.getSoltab('amplitude000')
-        elif tab == 'tec':
-            with self:
-                return self._solset.getSoltab('tec000')
-        elif tab == 'variance_phase':
-            with self:
-                return self._solset.getSoltab('variance_phase000')
-        elif tab == 'variance_amplitude':
-            with self:
-                return self._solset.getSoltab('variance_amplitude000')
-        elif tab == 'variance_tec':
-            with self:
-                return self._solset.getSoltab('variance_tec000')
+                soltab = self._solset.getSoltab("{}000".format(tab))
+                if self._selection is None:
+                    soltab.clearSelection()
+                else:
+                    soltab.setSelection(**self._selection)
+                return soltab.getValues(reference=np.array(self.ref_ant).astype(np.str_))
         else:
             return object.__getattribute__(self, tab)
+        
+    def select(self,**selection):
+        self._selection = selection
+        
+    def select_all(self):
+        self._selection = None
+    
