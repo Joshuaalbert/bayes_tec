@@ -19,7 +19,7 @@ class DataPack(object):
 
     def __init__(self,filename,readonly=False,solset='sol000'):
         self.filename = os.path.abspath(filename)
-        self.readonly=readonly
+        self.readonly =  readonly
         self.solset = solset
         # create if required
         H = h5parm(self.filename, readonly=False)
@@ -30,6 +30,18 @@ class DataPack(object):
         H.close()
         self.H = None
         self._contexts_open = 0
+        
+
+    def switch_solset(self,solset,array_file=None,directions=None,patch_names=None):
+        with self:
+            if solset not in self.H.getSolsetNames():
+                logging.info("Making solset: {}".format(solset))
+                self.H.makeSolset(solsetName=solset,addTables=True)
+                if directions is not None:
+                    self._solset.add_sources(directions,patch_names=patch_names)
+                if array_file is not None:
+                    self._solset.add_antennas(array_file=array_file)
+            self.solset = solset
 
     def __enter__(self):
         if self._contexts_open == 0:
@@ -193,6 +205,10 @@ class DataPack(object):
     def get_freqs(self,freqs):
         labs = ['{:.1f}MHz'.format(f/1e6) for f in freqs]
         return np.array(labs), freqs
+
+    def get_pols(self,pols):
+        with self:
+            return pols, np.arange(len(pols),dtype=np.int32)
     
     def add_freq_indep_tab(self, name, times, pols = None, ants = None, dirs = None, vals=None):
         with self:
@@ -256,7 +272,11 @@ class DataPack(object):
         axis : str
             The axis name.
         """
-        if tab in ['phase','amplitude','tec','variance_phase','variance_amplitude','variance_tec']:
+#        with self:
+#            tabs = self._solset.getSoltabNames()
+        tabs = ['phase','amplitude','tec','variance_phase',
+                'variance_amplitude','variance_tec']
+        if tab in tabs:
             with self:
                 soltab = self._solset.getSoltab("{}000".format(tab))
                 if self._selection is None:
@@ -266,6 +286,33 @@ class DataPack(object):
                 return soltab.getValues(reference=np.array(self.ref_ant).astype(np.str_))
         else:
             return object.__getattribute__(self, tab)
+
+    def __setattr__(self, tab, value):
+        """
+        Links any attribute with an "axis name" to getValuesAxis("axis name")
+        also links val and weight to the relative arrays.
+        Parameter
+        ----------
+        axis : str
+            The axis name.
+        value : array
+            The array of the right shape for selection.
+        """
+        
+#        with self:
+#            tabs = self._solset.getSoltabNames()
+        tabs = ['phase','amplitude','tec','variance_phase',
+                'variance_amplitude','variance_tec']
+        if tab in tabs:
+            with self:
+                soltab = self._solset.getSoltab("{}000".format(tab))
+                if self._selection is None:
+                    soltab.clearSelection()
+                else:
+                    soltab.setSelection(**self._selection)
+                return soltab.setValues(value)
+        else:
+            object.__setattr__(self, tab, value)
         
     def select(self,**selection):
         self._selection = selection
