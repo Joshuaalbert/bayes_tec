@@ -39,13 +39,15 @@ class HomoscedasticPhaseOnlySVGP(SVGP):
         Fmean, Fvar = self._build_predict(Xnew, full_cov=False)
         return Fmean*self.likelihood.tec_scale, Fvar*self.likelihood.tec_scale**2
 
-    @autoflow((float_type, [None,None]))
-    def predict_phase(self, Xnew):
+    @autoflow((float_type, [None,None]), (float_type, []))
+    def predict_phase(self, Xnew, eval_freq=140e6):
         """
         Draws the predictive mean and variance of dTEC at the points `Xnew`
         X should be [N,D] and this returns [N,num_latent], [N,num_latent]
+        eval_freq : float the eval freq for phase
         """
         Fmean, Fvar = self._build_predict(Xnew, full_cov=False)
+        self.likelihood.eval_freq = eval_freq
         return self.likelihood.predict_mean_and_var(Fmean, Fvar)
 
     @autoflow((float_type, [None, None]), (float_type, [None, None]))
