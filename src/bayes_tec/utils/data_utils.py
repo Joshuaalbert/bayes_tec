@@ -109,4 +109,37 @@ def make_data_vec(Y,freqs,weights=None):
     # ..., Nf, 2*N+1
     return np.concatenate([Y, weights, freqs],axis=-1)
 
+def define_subsets(X_t, overlap, max_block_size):
+    """
+    Define the subsets of X_t with minimum overlap size blocks, 
+    as a set of edges.
+    X_t :array (N,1)
+        times
+    overlap : float
+    max_block_size : int
+        The max number of points per block
+    Returns:
+    list of int, The edges
+    """
+    dt = X_t[1,0] - X_t[0,0]
+    T = X_t[-1,0] - X_t[0,0]
+    N = int(np.ceil(overlap / dt))
+    edges = list(range(0,X_t.shape[0],N))
+    edges[-1] = X_t.shape[0] - 1
+    blocks = []
+    block_i = 0
+    while block_i < len(edges)-1:
+        start = edges[block_i]
+        block_j = block_i
+        stop = edges[block_j+1]
+        while stop - start <= max_block_size:
+            if block_j < len(edges)-1:
+                block_j += 1
+                stop = edges[block_j+1]
+            else:
+                break
+        blocks.append((block_i,block_j))
+        assert blocks[-1][1] - blocks[-1][0] >= 2
+        block_i = block_j+1
+    return edges, blocks
 
