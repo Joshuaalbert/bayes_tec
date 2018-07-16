@@ -13,3 +13,4 @@ pandas
 tables
 cython
 cmocean
+astropy
