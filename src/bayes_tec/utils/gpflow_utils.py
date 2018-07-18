@@ -1,6 +1,7 @@
 from gpflow.actions import Action, Loop
 from gpflow.training import AdamOptimizer
 from ..logging import logging
+import tensorflow as tf
 
 class PrintAction(Action):
     def __init__(self, model, text):

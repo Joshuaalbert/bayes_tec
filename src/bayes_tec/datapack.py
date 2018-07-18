@@ -30,24 +30,25 @@ class DataPack(object):
         H.close()
         self.H = None
         self._contexts_open = 0
-        
+        self._selection = None        
 
     def switch_solset(self,solset,array_file=None,directions=None,patch_names=None):
         with self:
-            if solset not in self.H.getSolsetNames():
-                logging.info("Making solset: {}".format(solset))
-                self.H.makeSolset(solsetName=solset,addTables=True)
-                if directions is not None:
-                    self._solset.add_sources(directions,patch_names=patch_names)
-                if array_file is not None:
-                    self._solset.add_antennas(array_file=array_file)
             self.solset = solset
+            if self.solset not in self.H.getSolsetNames():
+                logging.info("Making solset: {}".format(self.solset))
+                self.H.makeSolset(solsetName=self.solset,addTables=True)
+                if directions is not None:
+                    self.add_sources(directions,patch_names=patch_names)
+                if array_file is not None:
+                    self.add_antennas(array_file=array_file)
+            
 
     def __enter__(self):
         if self._contexts_open == 0:
             self.H = h5parm(self.filename, readonly=self.readonly)
         self._contexts_open += 1
-        return self.H
+        return self
 
     def __exit__(self,exc_type, exc_val, exc_tb):
         if self.H:
@@ -63,6 +64,7 @@ class DataPack(object):
     @property
     def _solset(self):
         with self:
+            print(self)
             return self.H.getSolset(self.solset)
 
     def _load_array_file(self,array_file):
@@ -114,6 +116,10 @@ class DataPack(object):
             for lab,p in zip(labels,pos):
                 if lab not in antennaTable.cols.name[:].astype(type(lab)):
                     antennaTable.append([(lab,p)])
+                else:
+                    idx = np.where(antennaTable.cols.name[:].astype(type(lab)) == lab)[0][0]
+                    antennaTable.cols.position[idx] = p
+
 
     def add_sources(self, directions, patch_names=None):
         Nd = len(directions)
@@ -151,7 +157,7 @@ class DataPack(object):
     def array_center(self):
         with self:
             _, antennas = self.get_antennas(None)
-            center = np.mean(self.locs.cartesian.xyz,axis=1)
+            center = np.mean(antennas.cartesian.xyz,axis=1)
             center = ac.SkyCoord(x=center[0],y=center[1],z=center[2],frame='itrs')
             return center
 
@@ -199,6 +205,9 @@ class DataPack(object):
             return dir
 
     def get_times(self,times):
+        """
+        times are stored as mjs
+        """
         times = at.Time(times/86400.,format='mjd')
         return times.isot, times
 
@@ -227,12 +236,12 @@ class DataPack(object):
             Nt = len(times)
             if pols is not None:
                 if vals is None:
-                    phase = np.zeros([Npol,Nd,Na,Nt])
+                    vals = np.zeros([Npol,Nd,Na,Nt])
                 self._solset.makeSoltab(name, axesNames=['pol','dir','ant','time'],
                         axesVals=[pols, dirs, ants, times],vals=vals, weights=np.ones_like(vals))
             else:
                 if vals is None:
-                    phase = np.zeros([Nd,Na,Nt])
+                    vals = np.zeros([Nd,Na,Nt])
                 self._solset.makeSoltab(name, axesNames=['dir','ant','time'],
                         axesVals=[dirs, ants, times],vals=vals, weights=np.ones_like(vals))
     
@@ -274,16 +283,23 @@ class DataPack(object):
         """
 #        with self:
 #            tabs = self._solset.getSoltabNames()
-        tabs = ['phase','amplitude','tec','variance_phase',
-                'variance_amplitude','variance_tec']
+        tabs = ['phase','amplitude','tec']
+        tabs = ["weights_{}".format(t) for t in tabs] + tabs
         if tab in tabs:
+            if tab.startswith("weights_"):
+                tab = "".join(tab.split('weights_')[1:])
+                weight=True
+            else:
+                weight=False
             with self:
                 soltab = self._solset.getSoltab("{}000".format(tab))
                 if self._selection is None:
                     soltab.clearSelection()
                 else:
                     soltab.setSelection(**self._selection)
-                return soltab.getValues(reference=np.array(self.ref_ant).astype(np.str_))
+                
+                return soltab.getValues(reference=np.array(self.ref_ant).astype(np.str_),
+                            weight=weight)
         else:
             return object.__getattribute__(self, tab)
 
@@ -301,16 +317,22 @@ class DataPack(object):
         
 #        with self:
 #            tabs = self._solset.getSoltabNames()
-        tabs = ['phase','amplitude','tec','variance_phase',
-                'variance_amplitude','variance_tec']
+        tabs = ['phase','amplitude','tec']
+        tabs = ["weights_{}".format(t) for t in tabs] + tabs
+
         if tab in tabs:
+            if tab.startswith("weights_"):
+                tab = "".join(tab.split('weights_')[1:])
+                weight=True
+            else:
+                weight=False
             with self:
                 soltab = self._solset.getSoltab("{}000".format(tab))
                 if self._selection is None:
                     soltab.clearSelection()
                 else:
                     soltab.setSelection(**self._selection)
-                return soltab.setValues(value)
+                return soltab.setValues(value,weight=weight)
         else:
             object.__setattr__(self, tab, value)
         

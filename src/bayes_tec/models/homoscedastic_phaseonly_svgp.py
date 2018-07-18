@@ -1,3 +1,4 @@
+import tensorflow as tf
 from gpflow.models import SVGP
 from gpflow.decors import params_as_tensors, autoflow
 from gpflow import settings
@@ -17,15 +18,19 @@ class HomoscedasticPhaseOnlySVGP(SVGP):
         KL = self.build_prior_KL()
 
         # Get conditionals
-        fmean, fvar = self._build_predict(self.X, full_cov=False, full_output_cov=False)
+        fmean, fvar = self._build_predict(self.X, full_cov=False)
 
         # Get variational expectations.
-        var_exp = self.likelihood.variational_expectations(fmean, fvar, self.Y)
+        freqs = self.Y[:,-1:] # N, 1
+        # tile to matach Y
+        freqs = tf.tile(freqs,(1, self.num_latent))# N, num_latent
+        Y = self.Y[:,:self.num_latent] #N, num_latent
+        var_exp = self.likelihood.variational_expectations(fmean, fvar, Y, freqs = freqs)
 
-        weights = self.Y[:,-1:]
+        weights = self.Y[:,self.num_latent:2*self.num_latent]
         var_exp = var_exp * weights
 
-        # re-scale for minibatch size
+        # re-scale for minibatch sizenum_gauss_hermite_points
         scale = tf.cast(self.num_data, settings.float_type) / tf.cast(tf.shape(self.X)[0], settings.float_type)
 
         return tf.reduce_sum(var_exp) * scale - KL
@@ -52,9 +57,10 @@ class HomoscedasticPhaseOnlySVGP(SVGP):
 
     @autoflow((float_type, [None, None]), (float_type, [None, None]))
     def predict_density(self, Xnew, Ynew):
-        Fmean, Fvar = self._build_predict(Xnew, full_cov=False)
-        l = self.likelihood.predict_density(Fmean, Fvar, Ynew)
-        log_num_samples = tf.log(tf.cast(num_samples, float_type))
-        return tf.reduce_logsumexp(l - log_num_samples, axis=0)
-
-
+        Fmean, Fvar = self._build_predict(Xnew, full_cov=False, full_output_cov=False)
+        # Get variational expectations.
+        freqs = Ynew[:,-1:] # N, 1
+        # tile to matach Y
+        freqs = tf.tile(freqs,(1, self.num_latent))# N, num_latent
+        l = self.likelihood.predict_density(Fmean, Fvar, Ynew[:,:self.num_latent], freqs=freqs)
+        return l 

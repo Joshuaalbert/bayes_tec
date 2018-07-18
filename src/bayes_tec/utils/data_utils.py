@@ -62,21 +62,26 @@ def phase_weights(phase,**kwargs):
     array same shape as phase
     """
     shape = phase.shape
+    uncert_mean = []
     if len(shape) == 3:
         Nd, Nf, Nt = shape
         weights = []
         for l in range(Nf):
-            weights.append(weights_and_mean_uncert(phase[:,l,:],**kwargs))
-        return np.stack(weights, axis=1)
+            w,u = weights_and_mean_uncert(phase[:,l,:],**kwargs)
+            weights.append(w)
+            uncert_mean.append(u)
+        return np.stack(weights, axis=1), np.mean(uncert_mean)
     elif len(shape) == 4:
         Nd, Na, Nf, Nt = shape
         weights = []
         for i in range(Na):
             weights_ = []
             for l in range(Nf):
-                weights_.append(weights_and_mean_uncert(phase[:,i,l,:],**kwargs))
+                w,u = weights_and_mean_uncert(phase[:,i,l,:],**kwargs)
+                weights_.append(w)
+                uncert_mean.append(u)
             weights.append(np.stack(weights_,axis=1))
-        return np.stack(weights, axis=1)
+        return np.stack(weights, axis=1), np.mean(uncert_mean)
     else:
         raise ValueError("wrong shape {}".format(shape))
 
@@ -126,20 +131,19 @@ def define_subsets(X_t, overlap, max_block_size):
     N = int(np.ceil(overlap / dt))
     edges = list(range(0,X_t.shape[0],N))
     edges[-1] = X_t.shape[0] - 1
+
+    block_size = edges[1] - edges[0]
+    max_blocks = max_block_size // block_size
+    if max_blocks < 3:
+        return define_subsets(X_t, overlap + 1, max_block_size)
+    block_start = 0
     blocks = []
-    block_i = 0
-    while block_i < len(edges)-1:
-        start = edges[block_i]
-        block_j = block_i
-        stop = edges[block_j+1]
-        while stop - start <= max_block_size:
-            if block_j < len(edges)-1:
-                block_j += 1
-                stop = edges[block_j+1]
-            else:
-                break
-        blocks.append((block_i,block_j))
-        assert blocks[-1][1] - blocks[-1][0] >= 2
-        block_i = block_j+1
+    while block_start + max_blocks < len(edges):
+        blocks.append((block_start, block_start + max_blocks))
+        block_start = block_start + max_blocks - 1
+    blocks.append((block_start, len(edges) -1))
+    for b in blocks:
+        if b[1] - b[0] < 3:
+            return define_subsets(X_t, overlap+1,max_block_size)
     return edges, blocks
 

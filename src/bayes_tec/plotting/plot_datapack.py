@@ -222,9 +222,13 @@ class DatapackPlotter(object):
                     
                     if c >= Na:
                         continue
+                    try:
+                        title = antenna_labels[c].decode()
+                    except:
+                        title = antenna_labels[c]
                     _, p = self._create_polygon_plot(points, values=None, N = None,
                             ax=ax,cmap=cmap,overlay_points=plot_crosses,
-                            title="{} {:.1f}km".format(antenna_labels[c], ref_dist[c]),
+                            title="{} {:.1f}km".format(title, ref_dist[c]),
                             reverse_x=labels_in_radec)
                     p.set_clim(vmin,vmax)
                     axes_patches.append(p)
@@ -250,13 +254,15 @@ class DatapackPlotter(object):
                 plt.ioff()
 
 def _parallel_plot(arg):
-    datapack,time_idx,kwargs,output_folder=arg
+    datapack,time_slice,kwargs,output_folder=arg
     dp = DatapackPlotter(datapack=datapack)
-    fignames = [os.path.join(output_folder,"fig-{:04d}.png".format(j)) for j in time_idx]
-    dp.plot(time_idx=time_idx,fignames=fignames,**kwargs)
+    _,axes = dp.datapack.phase
+    times = axes['time']
+    fignames = [os.path.join(output_folder,"fig-{:04d}.png".format(j)) for j in range(len(times))[time_slice]]
+    dp.plot(time=time_slice,fignames=fignames,**kwargs)
     return fignames
     
-def animate_datapack(datapack,output_folder,num_processes=1,**kwargs):
+def animate_datapack(datapack,output_folder,num_processes,**kwargs):
     """
     Plot the datapack in parallel, then stitch into movie.
     datapack: str the datapack filename
@@ -269,12 +275,12 @@ def animate_datapack(datapack,output_folder,num_processes=1,**kwargs):
     except:
         pass
 
-    dp = DatapackPlotter(datapack=datapack)
-    with dp.datapack:
-        timestamps, times = dp.datapack.get_times(None)
+    with DataPack(datapack) as datapack:
+        datapack.add_antennas(DataPack.lofar_array)
+
     args = []
     for i in range(num_processes):
-        args.append((datapack,range(i,len(times),num_processes),kwargs,output_folder))
+        args.append((datapack,slice(i,None,num_processes),kwargs,output_folder))
     with futures.ProcessPoolExecutor(max_workers=num_processes) as executor:
         jobs = executor.map(_parallel_plot,args)
         results = list(jobs)

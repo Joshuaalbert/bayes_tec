@@ -1,8 +1,12 @@
 import gpflow as gp
 import numpy as np
 import tensorflow as tf
-
-from gpflow.likelihoods import Gaussian
+from gpflow import params_as_tensors
+from gpflow import transforms
+from gpflow.params import Parameter
+from gpflow.likelihoods import Likelihood
+from gpflow import settings
+from gpflow.quadrature import ndiagquad
 
 try:
     @tf.RegisterGradient('WrapGrad')
@@ -18,20 +22,24 @@ def wrap(phi):
         return tf.identity(out)
 
 
-class WrappedPhaseGaussian(Gaussian):
-    def __init__(self, tec_scale=0.01, freq=140e6, name=None):
+class WrappedPhaseGaussian(Likelihood):
+    def __init__(self, tec_scale=0.01, freq=140e6, num_gauss_hermite_points=20, variance=1.0, name=None):
         super().__init__(name=name)
+        self.variance = Parameter(
+            variance, transform=transforms.positive, dtype=settings.float_type)
         self.tec_scale = tec_scale
-        self.num_gauss_hermite_points = 20
+        self.num_gauss_hermite_points = num_gauss_hermite_points
         self.freq = tf.convert_to_tensor(freq,dtype=settings.float_type,name='test_freq') # frequency the phase is calculated at for the predictive distribution
         self.tec_conversion = tf.convert_to_tensor(tec_scale * -8.4480e9,dtype=settings.float_type,name='tec_conversion') # rad Hz/ tecu
         self.tec2phase = tf.convert_to_tensor(self.tec_conversion / self.freq,dtype=settings.float_type,name='tec2phase')
         
     @params_as_tensors
-    def logp(self, F, Y):
+    def logp(self, F, Y, freqs, **kwargs):
         """The log-likelihood function."""
-        freqs = Y[:,-2:-1]
-        Y = Y[:,:-1]
+        assert freqs is not None
+        #freqs = Y[:,-1:]
+        #Y = Y[:,:self.num_latent]
+        # N,1
         tec2phase = self.tec_conversion/freqs
         phase = F*tec2phase
         dphase = wrap(phase) - wrap(Y) # Ito theorem
@@ -51,5 +59,61 @@ class WrappedPhaseGaussian(Gaussian):
     @params_as_tensors
     def conditional_variance(self, F):
         return tf.fill(tf.shape(F),tf.cast(self.variance,gp.settings.float_type))
+
+    def predict_mean_and_var(self, Fmu, Fvar, **kwargs):
+        r"""
+        Given a Normal distribution for the latent function,
+        return the mean of Y
+        if
+            q(f) = N(Fmu, Fvar)
+        and this object represents
+            p(y|f)
+        then this method computes the predictive mean
+           \int\int y p(y|f)q(f) df dy
+        and the predictive variance
+           \int\int y^2 p(y|f)q(f) df dy  - [ \int\int y^2 p(y|f)q(f) df dy ]^2
+        Here, we implement a default Gauss-Hermite quadrature routine, but some
+        likelihoods (e.g. Gaussian) will implement specific cases.
+        """
+        integrand2 = lambda *X, **kwargs: self.conditional_variance(*X, **kwargs) + tf.square(self.conditional_mean(*X, **kwargs))
+        E_y, E_y2 = ndiagquad([self.conditional_mean, integrand2],
+                              self.num_gauss_hermite_points,
+                              Fmu, Fvar, **kwargs)
+        V_y = E_y2 - tf.square(E_y)
+        return E_y, V_y
+
+    def predict_density(self, Fmu, Fvar, Y, **kwargs):
+        r"""
+        Given a Normal distribution for the latent function, and a datum Y,
+        compute the log predictive density of Y.
+        i.e. if
+            q(f) = N(Fmu, Fvar)
+        and this object represents
+            p(y|f)
+        then this method computes the predictive density
+            \log \int p(y=Y|f)q(f) df
+        Here, we implement a default Gauss-Hermite quadrature routine, but some
+        likelihoods (Gaussian, Poisson) will implement specific cases.
+        """
+        return ndiagquad(self.logp,
+                         self.num_gauss_hermite_points,
+                         Fmu, Fvar, logspace=True, Y=Y, **kwargs)
+
+    def variational_expectations(self, Fmu, Fvar, Y, **kwargs):
+        r"""
+        Compute the expected log density of the data, given a Gaussian
+        distribution for the function values.
+        if
+            q(f) = N(Fmu, Fvar)
+        and this object represents
+            p(y|f)
+        then this method computes
+           \int (\log p(y|f)) q(f) df.
+        Here, we implement a default Gauss-Hermite quadrature routine, but some
+        likelihoods (Gaussian, Poisson) will implement specific cases.
+        """
+        return ndiagquad(self.logp,
+                         self.num_gauss_hermite_points,
+                         Fmu, Fvar, Y=Y, **kwargs)
 
 
