@@ -16,6 +16,8 @@ from gpflow.priors import LogNormal, Gaussian
 from gpflow.mean_functions import Constant
 from gpflow.kernels import Matern52, White
 from gpflow.features import InducingPoints
+#from gpflow.training.monitor import (create_global_step, PrintTimingsTask, PeriodicIterationCondition, 
+#        CheckpointTask, LogdirWriter, ModelToTensorBoardTask, Monitor)
 from gpflow import defer_build
 import gpflow.multioutput.kernels as mk
 import gpflow.multioutput.features as mf
@@ -137,7 +139,6 @@ class OverlapPhaseOnlySolver(Solver):
                         whiten=False)
 
             model.compile()
-            tf.summary.scalar('likelihood',-model.likelihood_tensor)
         return model
 
 
@@ -271,12 +272,40 @@ class OverlapPhaseOnlySolver(Solver):
             sess = self._new_session(graph, intra_op_threads, inter_op_threads)
             summary_id = len(glob.glob(os.path.join(self.summary_dir,"summary_*")))
             summary_folder = os.path.join(self.summary_dir,"summary_{:03d}".format(summary_id))
+            os.makedirs(summary_folder,exist_ok=True)
+
             with graph.as_default(), sess.as_default(), \
                     tf.summary.FileWriter(summary_folder, graph) as writer:
                 model = self._make_part_model(X, Y, Z, minibatch_size=minibatch_size, 
                         eval_freq=eval_freq, tec_scale=tec_scale, num_latent=num_latent, priors=priors)
+                
                 pred_lik = np.mean(model.predict_density(X,Y))
                 logging.info("Data var-likelihood before training {}".format(pred_lik))
+
+#                ###
+#                # Monitors
+#                timing_task = PrintTimingsTask()\
+#                        .with_name('timing')\
+#                        .with_condition(PeriodicIterationCondition(100))
+#                checkpoint_task = CheckpointTask(checkpoint_dir=summary_folder)\
+#                        .with_name('checkpoint')\
+#                        .with_condition(PeriodicIterationCondition(1000))  
+#                with LogdirWriter(summary_folder) as writer:
+#                    tensorboard_task = \
+#                            ModelToTensorBoardTask(writer, model, only_scalars=True)\
+#                        .with_name('tensorboard')\
+#                        .with_condition(PeriodicIterationCondition(10))\
+#                        .with_exit_condition(True)
+#
+#                    monitor_tasks = [timing_task, tensorboard_task, checkpoint_task]
+#
+#                    optimiser = AdamOptimizer(learning_rate)
+#                    global_step = create_global_step(sess)
+#                    with Monitor(monitor_tasks, sess, global_step, print_summary=True) \
+#                            as monitor:
+#                        optimiser.minimize(model, maxiter=iterations, step_callback=monitor, 
+#                                global_step=global_step)
+                
                 train_with_adam(model, learning_rate, iterations, SendSummary(model,writer))
                 pred_lik = np.mean(model.predict_density(X,Y))
                 logging.info("Data var-likelihood after training {}".format(pred_lik))
