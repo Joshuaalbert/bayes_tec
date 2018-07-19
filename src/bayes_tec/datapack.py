@@ -164,9 +164,11 @@ class DataPack(object):
     def get_antennas(self,ants):
         with self:
             antenna_labels, antennas = self.antennas
+            
             if ants is None:
                 ant_idx = slice(None)
             else:
+                ants = np.array(ants).astype(antenna_labels.dtype)
                 ant_idx = np.searchsorted(antenna_labels, ants)
             antennas = antennas[ant_idx]
             return antenna_labels[ant_idx], ac.SkyCoord(antennas[:,0]*au.m,antennas[:,1]*au.m,antennas[:,2]*au.m,frame='itrs')
@@ -189,9 +191,11 @@ class DataPack(object):
     def get_sources(self,dirs):
         with self:
             patch_names, directions = self.sources
+            
             if dirs is None:
                 dir_idx = slice(None)
             else:
+                dirs = np.array(dirs).astype(patch_names.dtype)
                 dir_idx = np.searchsorted(patch_names, dirs)
             directions = directions[dir_idx]
             return patch_names[dir_idx], ac.SkyCoord(directions[:,0]*au.rad, directions[:,1]*au.rad,frame='icrs')
