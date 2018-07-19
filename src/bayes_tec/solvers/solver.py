@@ -178,7 +178,7 @@ class OverlapPhaseOnlySolver(Solver):
             # Npols, Nd, Na, Nf, Nt, Ntabs
             Y = np.stack(Y,axis=-1)
             weights = np.stack(weights,axis=-1)
-            weight[np.isnan[weights]] = 1.
+            weights[np.isnan[weights]] = 1.
             uncert_mean = np.nanmean(1./np.sqrt(weights))
             Npol, Nd, Na, Nf, Nt, Ntabs = Y.shape
             # Nd, Npol*Na*Ntabs, Nf, Nt
