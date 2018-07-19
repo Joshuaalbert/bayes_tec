@@ -162,7 +162,7 @@ class OverlapPhaseOnlySolver(Solver):
                 Y.append(vals)
                 if reweight_obs:
                     logging.info("Re-calculating weights...")
-                    weights_ = phase_weights(vals,indep_axis = -2, num_threads = None,N=200,phase_wrap=True, min_uncert=1e-3)
+                    weights_ = phase_weights(vals,indep_axis = -1, num_threads = None,N=100,phase_wrap=True, min_uncert=1e-3)
                     self.datapack.__setattr__("weights_{}".format(tab), weights_)
                     weights.append(weights_)
                 else:
@@ -178,6 +178,7 @@ class OverlapPhaseOnlySolver(Solver):
             # Npols, Nd, Na, Nf, Nt, Ntabs
             Y = np.stack(Y,axis=-1)
             weights = np.stack(weights,axis=-1)
+            weight[np.isnan[weights]] = 1.
             uncert_mean = np.nanmean(1./np.sqrt(weights))
             Npol, Nd, Na, Nf, Nt, Ntabs = Y.shape
             # Nd, Npol*Na*Ntabs, Nf, Nt
