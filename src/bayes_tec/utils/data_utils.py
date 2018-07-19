@@ -1,4 +1,5 @@
 import numpy as np
+from concurrent import futures
 
 def wrap(x):
     return np.arctan2(np.sin(x),np.cos(x))
@@ -31,22 +32,19 @@ def make_coord_array(*X):
 def weights_and_mean_uncert(Y,N=200,phase_wrap=True, min_uncert=1e-3):
     """
     Get a weight matrix for each datapoint in Y using moving average of TD.
-    Y: array shape [Nd, Nt]
+    The values must be uncorrelated
+    Y: array shape [Nt], independent axis
     N : int the window
     Returns:
-    weights [Nd,Nt] and mean_uncert float
+    weights [Nt] and mean_uncert float
     """
-    weights = []
-    for k in range(Y.shape[0]):
-        dY = Y[k,:]
-        if phase_wrap:
-            dY = wrap(wrap(dY[:-1]) - wrap(dY[1:]))
-        else:
-            dY = dY[:-1] - dY[1:]
-        dY = np.pad(dY,(0,N),mode='symmetric')
-        uncert = np.sqrt(np.convolve(dY**2, np.ones((N,))/N, mode='valid',))
-        weights.append(uncert)
-    weights = np.stack(weights,axis=0)#uncert
+    if phase_wrap:
+        dY = wrap(wrap(Y[:-1]) - wrap(Y[1:]))
+    else:
+        dY = Y[:-1] - Y[1:]
+    dY = np.pad(dY,(0,N),mode='symmetric')
+    uncert = np.sqrt(np.convolve(dY**2, np.ones((N,))/N, mode='valid',))
+    weights = uncert
     weights = np.maximum(min_uncert,weights)
     mean_uncert = max(min_uncert,np.mean(weights))
     weights = 1./weights**2
@@ -54,7 +52,13 @@ def weights_and_mean_uncert(Y,N=200,phase_wrap=True, min_uncert=1e-3):
     weights[np.isnan(weights)] = 1.
     return weights, mean_uncert
 
-def phase_weights(phase,**kwargs):
+def _parallel_phase_weights(arg):
+    phase, kwargs = arg
+    w,u = weights_and_mean_uncert(phase,**kwargs)
+    return w,u
+
+
+def phase_weights(phase,indep_axis=-1,num_threads=None,**kwargs):
     """
     returns the weight matrix for phase
     phase: array [Nd, Na, Nf, Nt] or [Nd, Nf, Nt]
@@ -62,29 +66,34 @@ def phase_weights(phase,**kwargs):
     array same shape as phase
     """
     shape = phase.shape
-    uncert_mean = []
-    if len(shape) == 3:
-        Nd, Nf, Nt = shape
-        weights = []
-        for l in range(Nf):
-            w,u = weights_and_mean_uncert(phase[:,l,:],**kwargs)
-            weights.append(w)
-            uncert_mean.append(u)
-        return np.stack(weights, axis=1), np.mean(uncert_mean)
-    elif len(shape) == 4:
-        Nd, Na, Nf, Nt = shape
-        weights = []
-        for i in range(Na):
-            weights_ = []
-            for l in range(Nf):
-                w,u = weights_and_mean_uncert(phase[:,i,l,:],**kwargs)
-                weights_.append(w)
-                uncert_mean.append(u)
-            weights.append(np.stack(weights_,axis=1))
-        return np.stack(weights, axis=1), np.mean(uncert_mean)
-    else:
-        raise ValueError("wrong shape {}".format(shape))
+    roll_axis=False
+    if indep_axis not in [-1, len(shape)-1]:
+        roll_axis=True
+        phase = np.swapaxes(phase,indep_axis,len(shape)-1)
 
+    shape_ = phase.shape
+    phase = phase.reshape((-1, shape_[-1]))
+    N = phase.shape[0]
+    args = []
+    for i in range(N):
+        args.append((phase[i,:], kwargs))
+
+    with futures.ThreadPoolExecutor(max_workers=num_threads) as executor:
+        jobs = executor.map(_parallel_phase_weights,args)
+        results = list(jobs)
+
+    weights = np.zeros_like(phase)
+    uncert_mean = []
+    for i in range(N):
+        w,u = results[i]
+        weights[i,:] = w
+        uncert_mean.append(u)
+    weights = weights.reshape(shape_)
+    if roll_axis:
+        return np.swapaxes(weights,indep_axis,len(shape)-1), np.mean(uncert_mean)
+    else:
+        return weights, np.mean(uncert_mean)
+    
 def make_data_vec(Y,freqs,weights=None):
     """
     Stacks weights, and repeats the freqs and puts at the end of Y so that 

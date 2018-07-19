@@ -141,18 +141,14 @@ class DatapackPlotter(object):
 
         with self.datapack:
             self.datapack.select(ant=ant,time=time,freq=freq,dir=dir,pol=pol)
-            if observable == 'phase':
-                obs,axes = self.datapack.phase
-            elif observable == 'variance_phase':
+            obs,axes = self.datapack.__getattr__(observable)
+            if observable.startswith('weights_'):
+                obs = np.sqrt(1./obs) #uncert from weights = 1/var
                 phase_wrap=False
-                obs,axes = self.datapack.variance_phase
-            elif observable == 'std':
-                phase_wrap = False
-                obs,axes = self.datapack.variance_phase
-                obs = np.sqrt(obs)
             if 'pol' in axes.keys():
                 # plot only first pol selected
                 obs = obs[0,...]
+
             #obs is dir, ant, freq, time
             antenna_labels, antennas = self.datapack.get_antennas(axes['ant'])
             patch_names, directions = self.datapack.get_sources(axes['dir'])
@@ -280,8 +276,8 @@ def animate_datapack(datapack,output_folder,num_processes,**kwargs):
     except:
         pass
 
-    with DataPack(datapack) as datapack:
-        datapack.add_antennas(DataPack.lofar_array)
+    with DataPack(datapack) as datapack_fix:
+        datapack_fix.add_antennas(DataPack.lofar_array)
 
     args = []
     for i in range(num_processes):

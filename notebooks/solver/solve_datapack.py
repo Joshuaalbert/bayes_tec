@@ -123,6 +123,8 @@ def add_args(parser):
                       help="Jitter for stability")
     optional.add_argument("--eval_freq", type=float, default=144e6, 
                       help="Eval frequency")
+    optional.add_argument("--reweight_obs", type="bool", default=True, 
+                      help="Whether to re-calculate the weights down the frequency axis. Otherwise use /weight table.")
     optional.add_argument("--inter_op_threads", type=int, default=0,
                        help="""The max number of concurrent threads""")
     optional.add_argument("--intra_op_threads", type=int, default=0,

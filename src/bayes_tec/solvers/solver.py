@@ -143,7 +143,7 @@ class OverlapPhaseOnlySolver(Solver):
         return model
 
 
-    def run(self, ant_sel=None, time_sel=None, dir_sel=None, freq_sel=None, pol_sel=None, 
+    def run(self, ant_sel=None, time_sel=None, dir_sel=None, freq_sel=None, pol_sel=None,reweight_obs=True, 
             screen_res=30, jitter=1e-6, learning_rate=1e-3, iterations=10000, minibatch_size=128, 
             eval_freq=140e6, dof_ratio=35., max_block_size=800, tec_scale = 0.01, time_skip=3, 
             intra_op_threads=0, inter_op_threads=0, shared_kernels=True, shared_features=True, **kwargs):
@@ -153,23 +153,39 @@ class OverlapPhaseOnlySolver(Solver):
         with self.datapack:
             self.datapack.select(ant=ant_sel,time=time_sel, dir=dir_sel, freq=freq_sel, pol=pol_sel)
             Y = []
+            weights = []
+            uncert_mean = []
             axes = None
+            # general for more tabs if desired (though model must change)
             for tab in self.tabs:
                 vals, axes = self.datapack.__getattr__(tab)
+                # each Npols, Nd, Na, Nf, Nt
                 Y.append(vals)
+                if reweight_obs:
+
+                    weights_, uncert_mean_ = phase_weights(vals,indep_axis = -2, num_threads = None,N=200,phase_wrap=True, min_uncert=1e-3)
+                    self.datapack.__setattr__("weights_{}".format(tab), weights_)
+                    weights.append(weights_)
+                    uncert_mean.append(uncert_mean_)
+                else:
+                    weights_, _ = self.datapack.__getattr__("weights_{}".format(tab))
+                    weights.append(weights_)
+                    uncert_mean.append(np.nanmean(np.sqrt(1./weights)))
+            uncert_mean = np.mean(uncert_mean)
 
             antenna_labels, antennas = self.datapack.get_antennas(axes['ant'])
             patch_names, directions = self.datapack.get_sources(axes['dir'])
             timestamps, times = self.datapack.get_times(axes['time'])
             freq_labels, freqs = self.datapack.get_freqs(axes['freq'])
             pol_labels, pols = self.datapack.get_pols(axes['pol'])
-
+            
             # Npols, Nd, Na, Nf, Nt, Ntabs
             Y = np.stack(Y,axis=-1)
+            weights = np.stack(weights,axis=-1)
             Npol, Nd, Na, Nf, Nt, Ntabs = Y.shape
             # Nd, Npol*Na*Ntabs, Nf, Nt
             Y = Y.transpose((1,0,2,5, 3,4)).reshape((Nd, Npol*Na*Ntabs, Nf, Nt))
-            weights, uncert_mean = phase_weights(Y,N=200,phase_wrap=True, min_uncert=1e-3)
+            weights = weights.transpose((1,0,2,5, 3,4)).reshape((Nd, Npol*Na*Ntabs, Nf, Nt))
             #Nd, Nt, Nf, Npol*Na*Ntabs
             Y = Y.transpose((0,3,2,1))
             weights = weights.transpose((0,3,2,1))
@@ -206,8 +222,8 @@ class OverlapPhaseOnlySolver(Solver):
                     directions = directions_ * np.pi/180.)
             # store variance in tec/weights
             self.datapack.add_freq_indep_tab('tec', times.mjd*86400., pols = pol_labels)
-            screen_dtec = self.datapack.tec
-            screen_dtec_var = np.zeros_like(self.datapack.tec)
+            screen_dtec, _ = self.datapack.tec
+            screen_dtec_var = np.zeros_like(screen_dtec)
             # output solset
             self.datapack.switch_solset("posterior_sol", 
                     array_file=DataPack.lofar_array, 
@@ -285,30 +301,6 @@ class OverlapPhaseOnlySolver(Solver):
                 
                 pred_lik = np.mean(model.predict_density(X,Y))
                 logging.info("Data var-likelihood before training {}".format(pred_lik))
-
-#                ###
-#                # Monitors
-#                timing_task = PrintTimingsTask()\
-#                        .with_name('timing')\
-#                        .with_condition(PeriodicIterationCondition(100))
-#                checkpoint_task = CheckpointTask(checkpoint_dir=summary_folder)\
-#                        .with_name('checkpoint')\
-#                        .with_condition(PeriodicIterationCondition(1000))  
-#                with LogdirWriter(summary_folder) as writer:
-#                    tensorboard_task = \
-#                            ModelToTensorBoardTask(writer, model, only_scalars=True)\
-#                        .with_name('tensorboard')\
-#                        .with_condition(PeriodicIterationCondition(10))\
-#                        .with_exit_condition(True)
-#
-#                    monitor_tasks = [timing_task, tensorboard_task, checkpoint_task]
-#
-#                    optimiser = AdamOptimizer(learning_rate)
-#                    global_step = create_global_step(sess)
-#                    with Monitor(monitor_tasks, sess, global_step, print_summary=True) \
-#                            as monitor:
-#                        optimiser.minimize(model, maxiter=iterations, step_callback=monitor, 
-#                                global_step=global_step)
                 
                 train_with_adam(model, learning_rate, iterations, [SendSummary(model,writer,write_period=10), SaveModel(save_folder, save_period=1000)])
                 pred_lik = np.mean(model.predict_density(X,Y))
@@ -344,10 +336,7 @@ class OverlapPhaseOnlySolver(Solver):
             self.datapack.switch_solset("posterior_sol")
 #            self.datapack.select(ant=ant_sel,time=slice(sub_start,sub_stop,1), dir=dir_sel, freq=freq_sel, pol=pol_sel)
             self.datapack.select_all()
-            logging.warning(self.datapack.tec[0].shape)
-            logging.warning(posterior_dtec.shape)
-            logging.warning(posterior_dtec_var.shape)
             self.datapack.tec = posterior_dtec
-            self.datapack.weights_tec = posterior_dtec_var
+            self.datapack.weights_tec = 1./posterior_dtec_var
 
 

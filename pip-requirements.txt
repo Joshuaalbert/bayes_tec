@@ -14,3 +14,4 @@ tables
 cython
 cmocean
 astropy
+concurrent
