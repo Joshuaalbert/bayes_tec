@@ -1,4 +1,3 @@
-
 from .logging import logging
 from losoto.h5parm import h5parm
 import os
@@ -7,6 +6,7 @@ import astropy.units as au
 import astropy.time as at
 import astropy.coordinates as ac
 import sys
+import itertools
 
 class DataPack(object):
     """
@@ -26,7 +26,6 @@ class DataPack(object):
         if self.solset not in H.getSolsetNames():
             #adds the antenna, directions tables
             H.makeSolset(solsetName=self.solset,addTables=True)
-            logging.warning("Created {}".format(str(H)))
         H.close()
         self.H = None
         self._contexts_open = 0
@@ -58,13 +57,39 @@ class DataPack(object):
             self._contexts_open -= 1
 
     def __repr__(self):
+
+        def grouper(n, iterable, fillvalue=None):
+            "grouper(3, 'ABCDEFG', 'x') --> ABC DEF Gxx"
+            args = [iter(iterable)] * n
+            return itertools.zip_longest(*args, fillvalue=fillvalue)
+        
         with self:
-            return str(self.H)
+            info = ""
+            solsets = self.H.getSolsetNames()
+            for solset in solsets:
+                info += "=== solset: {} ===\n".format(solset)
+                solset = self.H.getSolset(solset)
+                sources = sorted( solset.getSou().keys() )
+                info += "Directions: "
+                for src_name1, src_name2, src_name3 in grouper(3, sources):
+                    info += "{0:}\t{1:}\t{2:}\n".format(src_name1, src_name2, src_name3)
+
+                antennas = sorted( solset.getAnt().keys() )
+                info += "\nStations: "
+                for ant1, ant2, ant3, ant4 in grouper(4, antennas):
+                    info += "{0:}\t{1:}\t{2:}\t{3:}\n".format(ant1, ant2, ant3, ant4)
+                soltabs = solset.getSoltabNames()
+                for soltab in soltabs:
+                    info += "== soltab: {} ==\n".format(soltab)
+                    soltab = solset.getSoltab(soltab)
+                    shape = tuple([soltab.getAxisLen(a) for a in soltab.getAxesNames()])
+                    info += "shape {}\n".format(shape)
+
+            return info
 
     @property
     def _solset(self):
         with self:
-            print(self)
             return self.H.getSolset(self.solset)
 
     def _load_array_file(self,array_file):
