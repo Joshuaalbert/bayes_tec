@@ -1,7 +1,7 @@
 from ..datapack import DataPack
 from ..utils.data_utils import phase_weights, make_data_vec, make_coord_array, define_subsets
 from ..utils.stat_utils import log_normal_solve
-from ..utils.gpflow_utils import train_with_adam, SendSummary
+from ..utils.gpflow_utils import train_with_adam, SendSummary, SaveModel
 from ..likelihoods import WrappedPhaseGaussian
 from ..frames import ENU
 from ..models.homoscedastic_phaseonly_svgp import HomoscedasticPhaseOnlySVGP
@@ -29,9 +29,11 @@ class Solver(object):
         run_dir = os.path.abspath(run_dir)
         self.run_id = len(glob.glob(os.path.join(run_dir,"run_*")))
         self.run_dir = os.path.join(run_dir,"run_{:03d}".format(self.run_id))
-        self.summary_dir = os.path.join(run_dir,"run_{:03d}".format(self.run_id),"summaries")
+        self.summary_dir = os.path.join(self.run_dir,"summaries")
+        self.save_dir = os.path.join(self.run_dir, "checkpoints")
         os.makedirs(self.run_dir,exist_ok=True)
         os.makedirs(self.summary_dir,exist_ok=True)
+        os.makedirs(self.save_dir,exist_ok=True)
         if isinstance(datapack,str):
             datapack = DataPack(datapack,readonly=True)
         self.datapack = datapack
@@ -273,7 +275,10 @@ class OverlapPhaseOnlySolver(Solver):
             summary_id = len(glob.glob(os.path.join(self.summary_dir,"summary_*")))
             summary_folder = os.path.join(self.summary_dir,"summary_{:03d}".format(summary_id))
             os.makedirs(summary_folder,exist_ok=True)
-
+            save_id = len(glob.glob(os.path.join(self.save_dir,"save_*")))
+            save_folder = os.path.join(self.save_dir,"save_{:03d}".format(save_id))
+            os.makedirs(save_folder,exist_ok=True)
+            
             with graph.as_default(), sess.as_default(), \
                     tf.summary.FileWriter(summary_folder, graph) as writer:
                 model = self._make_part_model(X, Y, Z, minibatch_size=minibatch_size, 
@@ -306,7 +311,7 @@ class OverlapPhaseOnlySolver(Solver):
 #                        optimiser.minimize(model, maxiter=iterations, step_callback=monitor, 
 #                                global_step=global_step)
                 
-                train_with_adam(model, learning_rate, iterations, SendSummary(model,writer))
+                train_with_adam(model, learning_rate, iterations, [SendSummary(model,writer,write_period=10), SaveModel(save_folder, save_period=1000)])
                 pred_lik = np.mean(model.predict_density(X,Y))
                 logging.info("Data var-likelihood after training {}".format(pred_lik))
                 ###
