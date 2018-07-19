@@ -34,7 +34,7 @@ class Solver(object):
         os.makedirs(self.summary_dir,exist_ok=True)
         os.makedirs(self.save_dir,exist_ok=True)
         if isinstance(datapack,str):
-            datapack = DataPack(datapack,readonly=True)
+            datapack = DataPack(datapack)
         self.datapack = datapack
     def run(self,*args, **kwargs):
         """Run the solver"""
