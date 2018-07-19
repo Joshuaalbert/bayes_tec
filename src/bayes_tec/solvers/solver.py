@@ -154,7 +154,6 @@ class OverlapPhaseOnlySolver(Solver):
             self.datapack.select(ant=ant_sel,time=time_sel, dir=dir_sel, freq=freq_sel, pol=pol_sel)
             Y = []
             weights = []
-            uncert_mean = []
             axes = None
             # general for more tabs if desired (though model must change)
             for tab in self.tabs:
@@ -162,16 +161,13 @@ class OverlapPhaseOnlySolver(Solver):
                 # each Npols, Nd, Na, Nf, Nt
                 Y.append(vals)
                 if reweight_obs:
-
-                    weights_, uncert_mean_ = phase_weights(vals,indep_axis = -2, num_threads = None,N=200,phase_wrap=True, min_uncert=1e-3)
+                    logging.info("Re-calculating weights...")
+                    weights_ = phase_weights(vals,indep_axis = -2, num_threads = None,N=200,phase_wrap=True, min_uncert=1e-3)
                     self.datapack.__setattr__("weights_{}".format(tab), weights_)
                     weights.append(weights_)
-                    uncert_mean.append(uncert_mean_)
                 else:
                     weights_, _ = self.datapack.__getattr__("weights_{}".format(tab))
                     weights.append(weights_)
-                    uncert_mean.append(np.nanmean(np.sqrt(1./weights)))
-            uncert_mean = np.mean(uncert_mean)
 
             antenna_labels, antennas = self.datapack.get_antennas(axes['ant'])
             patch_names, directions = self.datapack.get_sources(axes['dir'])
@@ -182,6 +178,7 @@ class OverlapPhaseOnlySolver(Solver):
             # Npols, Nd, Na, Nf, Nt, Ntabs
             Y = np.stack(Y,axis=-1)
             weights = np.stack(weights,axis=-1)
+            uncert_mean = np.nanmean(1./np.sqrt(weights))
             Npol, Nd, Na, Nf, Nt, Ntabs = Y.shape
             # Nd, Npol*Na*Ntabs, Nf, Nt
             Y = Y.transpose((1,0,2,5, 3,4)).reshape((Nd, Npol*Na*Ntabs, Nf, Nt))
