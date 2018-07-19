@@ -116,7 +116,7 @@ class DatapackPlotter(object):
         return ax, img
 
 
-    def plot(self, ant=None,time=None,freq=None,dir=None,pol=None, fignames=None, vmin=None,vmax=None,mode='perantenna',observable='phase',phase_wrap=True, log_scale=False, plot_crosses=True,plot_facet_idx=False,plot_patchnames=False,labels_in_radec=False,show=False, plot_arrays=False):
+    def plot(self, ant=None,time=None,freq=None,dir=None,pol=None, fignames=None, vmin=None,vmax=None,mode='perantenna',observable='phase',phase_wrap=True, log_scale=False, plot_crosses=True,plot_facet_idx=False,plot_patchnames=False,labels_in_radec=False,show=False, plot_arrays=False, **kwargs):
         """
         Plot datapack with given parameters.
         """
@@ -256,10 +256,15 @@ class DatapackPlotter(object):
 def _parallel_plot(arg):
     datapack,time_slice,kwargs,output_folder=arg
     dp = DatapackPlotter(datapack=datapack)
-    _,axes = dp.datapack.phase
-    times = axes['time']
+    with dp.datapack:
+        # Get the time selection desired
+        dp.datapack.select(time=kwargs.get('time',None))
+        axes = dp.datapack.axes_phase
+    # timeslice the selection 
+    times = axes['time']#mjs
+    kwargs['time'] = time_slice
     fignames = [os.path.join(output_folder,"fig-{:04d}.png".format(j)) for j in range(len(times))[time_slice]]
-    dp.plot(time=time_slice,fignames=fignames,**kwargs)
+    dp.plot(fignames=fignames,**kwargs)
     return fignames
     
 def animate_datapack(datapack,output_folder,num_processes,**kwargs):

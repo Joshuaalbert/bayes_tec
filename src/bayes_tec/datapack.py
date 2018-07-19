@@ -313,22 +313,30 @@ class DataPack(object):
 #        with self:
 #            tabs = self._solset.getSoltabNames()
         tabs = ['phase','amplitude','tec']
-        tabs = ["weights_{}".format(t) for t in tabs] + tabs
+        tabs = ["weights_{}".format(t) for t in tabs] + ["axes_{}".format(t) for t in tabs] + tabs
+        weight = False
+        axes = False
         if tab in tabs:
             if tab.startswith("weights_"):
                 tab = "".join(tab.split('weights_')[1:])
                 weight=True
-            else:
-                weight=False
+            if tab.startswith("axes_"):
+                tab = "".join(tab.split('axes_')[1:])
+                axes=True
             with self:
                 soltab = self._solset.getSoltab("{}000".format(tab))
                 if self._selection is None:
                     soltab.clearSelection()
                 else:
                     soltab.setSelection(**self._selection)
-                
-                return soltab.getValues(reference=np.array(self.ref_ant).astype(np.str_),
-                            weight=weight)
+                if not axes:
+                    return soltab.getValues(reference=np.array(self.ref_ant).astype(np.str_),
+                                weight=weight)
+                else:
+                    axisVals = {}
+                    for axis in soltab.getAxesNames():
+                        axisVals[axis] = soltab.getAxisValues(axis)
+                    return axisVals
         else:
             return object.__getattribute__(self, tab)
 
@@ -347,21 +355,28 @@ class DataPack(object):
 #        with self:
 #            tabs = self._solset.getSoltabNames()
         tabs = ['phase','amplitude','tec']
-        tabs = ["weights_{}".format(t) for t in tabs] + tabs
-
+        tabs = ["weights_{}".format(t) for t in tabs] + ["axes_{}".format(t) for t in tabs] + tabs
+        weight = False
+        axes = False
         if tab in tabs:
             if tab.startswith("weights_"):
                 tab = "".join(tab.split('weights_')[1:])
                 weight=True
-            else:
-                weight=False
+            if tab.startswith("axes_"):
+                tab = "".join(tab.split('axes_')[1:])
+                axes=True
             with self:
                 soltab = self._solset.getSoltab("{}000".format(tab))
                 if self._selection is None:
                     soltab.clearSelection()
                 else:
                     soltab.setSelection(**self._selection)
-                return soltab.setValues(value,weight=weight)
+                if not axes:
+                    return soltab.setValues(value,weight=weight)
+                else:
+                    assert isinstance(value,dict), "Axes must come in dict of 'name':vals"
+                    for k,v in values.items():
+                        soltab.setAxisValues(k,v)
         else:
             object.__setattr__(self, tab, value)
         
