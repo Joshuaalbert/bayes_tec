@@ -43,9 +43,15 @@ def weights_and_mean_uncert(Y,N=200,phase_wrap=True, min_uncert=1e-3):
         dY = wrap(wrap(Y[:,1:]) - wrap(Y[:,:-1]))
     else:
         dY = Y[:,1:] - Y[:,:-1]
+
     dY = np.pad(dY,((0,0),(0,1)),mode='symmetric')
-    k = np.ones((1,N))/N
-    uncert = np.sqrt(convolve(dY**2,k,mode='reflect'))
+    dY *= dY
+    uncert = np.zeros_like(Y)
+    for i in range(-(N>>1),N>>1):
+        uncert += np.roll(dY,i,axis=1)
+    uncert /= N
+    uncert = np.sqrt(uncert)
+
     weights = np.maximum(min_uncert,uncert)
     weights = 1./weights**2
     weights[np.isnan(weights)] = 0.01
