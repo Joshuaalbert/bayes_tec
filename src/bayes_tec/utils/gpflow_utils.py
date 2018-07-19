@@ -34,7 +34,7 @@ class SendSummary(Action):
                           for p in parameters if p.size > 1]
         self.hist_summary = tf.summary.merge(hist_summaries)
 
-        self.summary = tf.summary.merge([self.scalar_summary,self.hist_summary])
+        self.summary = self.scalar_summary#tf.summary.merge([self.scalar_summary,self.hist_summary])
 
         
     def run(self, ctx):
