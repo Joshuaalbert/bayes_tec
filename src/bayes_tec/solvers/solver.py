@@ -22,7 +22,6 @@ from gpflow import defer_build
 import gpflow.multioutput.kernels as mk
 import gpflow.multioutput.features as mf
 import tensorflow as tf
-import argparse
 
 class Solver(object):
     def __init__(self,run_dir, datapack):
@@ -64,7 +63,7 @@ class OverlapPhaseOnlySolver(Solver):
         self.tabs = ['phase']
 
     def _make_part_model(self, X, Y, Z, minibatch_size=None, eval_freq=140e6, 
-            tec_scale=0.01, num_latent=1, priors=None, shared_kernels=True, shared_feat=True):
+            tec_scale=0.01, num_latent=1, priors=None, shared_kernels=True, shared_features=True):
         """
         Create a gpflow model for a selection of data
         X: array (N, Din)
@@ -120,7 +119,7 @@ class OverlapPhaseOnlySolver(Solver):
             else:
                 kern = mk.SharedIndependentMok(_kern(),num_latent)
 
-            if not shared_feat:
+            if not shared_features:
                 feature_list = [InducingPoints(Z) for _ in range(num_latent)]
                 feature = mf.SeparateIndependentMof(feature_list)
             else:
@@ -147,7 +146,7 @@ class OverlapPhaseOnlySolver(Solver):
     def run(self, ant_sel=None, time_sel=None, dir_sel=None, freq_sel=None, pol_sel=None, 
             screen_res=30, jitter=1e-6, learning_rate=1e-3, iterations=10000, minibatch_size=128, 
             eval_freq=140e6, dof_ratio=35., max_block_size=800, tec_scale = 0.01, time_skip=3, 
-            intra_op_threads=0, inter_op_threads=0):
+            intra_op_threads=0, inter_op_threads=0, shared_kernels=True, shared_features=True, **kwargs):
 
         settings.numerics.jitter = jitter
 
@@ -282,7 +281,7 @@ class OverlapPhaseOnlySolver(Solver):
             with graph.as_default(), sess.as_default(), \
                     tf.summary.FileWriter(summary_folder, graph) as writer:
                 model = self._make_part_model(X, Y, Z, minibatch_size=minibatch_size, 
-                        eval_freq=eval_freq, tec_scale=tec_scale, num_latent=num_latent, priors=priors)
+                        eval_freq=eval_freq, tec_scale=tec_scale, num_latent=num_latent, priors=priors, shared_kernels=shared_kernels, shared_features=shared_features)
                 
                 pred_lik = np.mean(model.predict_density(X,Y))
                 logging.info("Data var-likelihood before training {}".format(pred_lik))
@@ -351,55 +350,4 @@ class OverlapPhaseOnlySolver(Solver):
             self.datapack.tec = posterior_dtec
             self.datapack.weights_tec = posterior_dtec_var
 
-def add_args(parser):
-    parser.register("type", "bool", lambda v: v.lower() == "true")
-
-    # network
-    parser.add_argument("--antenna", type=str, default="*", 
-                        help="""The antennas selection using regex.\n{}""".format(list(zip(range(len(antenna_labels)),antenna_labels))))
-    parser.add_argument("--start_time", type=int, default=0,
-                      help="Start time index")
-    parser.add_argument("--end_time", type=int, default=20,
-                      help="End time index")
-    parser.add_argument("--time_skip", type=int, default=2,
-                      help="Time skip")
-    parser.add_argument("--dof_ratio", type=float, default=40.,
-                       help="""The ratio of temporal-spatial coordinates to degrees of freedom.""")
-    parser.add_argument("--minibatch_size", type=int, default=256,
-                      help="Size of minibatch")
-    parser.add_argument("--learning_rate", type=float, default=1e-3,
-                      help="learning rate")
-    parser.add_argument("--plot", type="bool", default=True, const=True,nargs='?',
-                      help="Whether to plot results")
-    parser.add_argument("--run_dir", type=str, default='./run_dir', 
-                      help="Where to run the solve")
-    parser.add_argument("--iterations", type=int, default=10000, 
-                      help="How many iterations to run")
-    parser.add_argument("--jitter", type=float, default=1e-6, 
-                      help="Jitter for stability")
-    parser.add_argument("--eval_freq", type=float, default=144e6, 
-                      help="Eval frequency")
-    parser.add_argument("--inter_op_threads", type=int, default=0,
-                       help="""The max number of concurrent threads""")
-    parser.add_argument("--intra_op_threads", type=int, default=0,
-                       help="""The number threads allowed for multi-threaded ops.""")
-    parser.add_argument("--tec_scale", type=float, default=0.01,
-                       help="""The relative tec scale used for scaling the GP model for computational stability.""")
-    parser.add_argument("--datapack", type=str,
-                       help="""Datapack input, a losoto h5parm.""")
-
-if __name__=='__main__':
-    parser = argparse.ArgumentParser()
-    add_args(parser)
-    flags, unparsed = parser.parse_known_args()
-    run_solve(flags._asdict())
-
-
-
-
-
-
-
-            
-                
 
