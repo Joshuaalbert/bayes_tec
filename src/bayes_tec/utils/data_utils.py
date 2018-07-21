@@ -1,6 +1,7 @@
 import numpy as np
 from ..logging import logging
 from scipy.ndimage.filters import convolve
+from concurrent import futures
 
 def wrap(x):
     return np.arctan2(np.sin(x),np.cos(x))
@@ -30,7 +31,7 @@ def make_coord_array(*X):
     
     return np.reshape(X,(-1,X.shape[-1]))
 
-def _parallel_weights(arg):
+def _parallel_shift(arg):
     position, dY2 = arg
     return np.roll(dY2, position, axis=1)
 
@@ -47,41 +48,39 @@ def calculate_weights(Y,indep_axis=-1, N=200,phase_wrap=True, min_uncert=1e-3, n
     Returns:
     weights [..., Nt] of same shape and dtype as Y
     """
-    shape = Y.shape
-    roll_axis=False
-    if indep_axis not in [-1, len(shape)-1]:
-        roll_axis=True
-        Y = np.swapaxes(Y,indep_axis,len(shape)-1)
-    shape_ = Y.shape
-    #N, Nt
-    Y = Y.reshape((-1, shape_[-1]))
-
     if phase_wrap:
-        dY2 = wrap(wrap(Y[:,1:]) - wrap(Y[:,:-1]))
+        z = np.exp(1j*Y)
+        args = []
+        for i in range(-(N>>1),N-(N>>1)):
+            args.append((i, z))
+
+        with futures.ThreadPoolExecutor(max_workers=num_threads) as executor:
+            jobs = executor.map(_parallel_shift,args)
+            results = list(jobs)# each is N, Nt but rolled
+        for r in results[1:]:
+            results[0] += r
+        results[0] /= N
+        z_mean = results[0]
+        R2 = z_mean * z_mean.conj()
+        Re2 = N/(N-1)*(R2 - 1./N)
+        var = -np.log(Re2)
     else:
-        dY2 = Y[:,1:] - Y[:,:-1]
-
-    dY2 = np.pad(dY2,((0,0),(0,1)),mode='symmetric')
-    dY2 *= dY2
-
-    args = []
-    for i in range(-(N>>1),N>>1):
-        args.append((i, dY2))
-
-    with futures.ThreadPoolExecutor(max_workers=num_threads) as executor:
-        jobs = executor.map(_parallel_weights,args)
-        results = list(jobs)# each is N, Nt but rolled
-    
-    var = np.mean(np.stack(results, axis=0),axis=0)
+        args = []
+        for i in range(-(N>>1),N-(N>>1)):
+            args.append((i, Y))
+        with futures.ThreadPoolExecutor(max_workers=num_threads) as executor:
+            jobs = executor.map(_parallel_shift,args)
+            results = list(jobs)# each is N, Nt but rolled
+        mean = results[0].copy()
+        for r in results[1:]:
+            mean += r
+        mean /= N
+        var = (results[0] - mean)**2
+        for r in results[1:]:
+            var += (r - mean)**2
+        var /= N
     var = np.maximum(min_uncert**2, var)
-    weights = 1./var
-
-
-    weights = weights.reshape(shape_)
-    if roll_axis:
-        return np.swapaxes(weights,indep_axis,len(shape)-1)
-    else:
-        return weights
+    return 1./var
     
 def make_data_vec(Y,freqs,weights=None):
     """
