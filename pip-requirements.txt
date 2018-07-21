@@ -14,4 +14,4 @@ tables
 cython
 cmocean
 astropy
-concurrent
+futures
