@@ -63,7 +63,7 @@ def calculate_weights(Y,indep_axis=-1, N=200,phase_wrap=True, min_uncert=1e-3, n
         z_mean = results[0]
         R2 = z_mean * z_mean.conj()
         Re2 = N/(N-1)*(R2 - 1./N)
-        var = -np.log(Re2)
+        var = -np.log(Re2).astype(Y.dtype)
     else:
         args = []
         for i in range(-(N>>1),N-(N>>1)):
