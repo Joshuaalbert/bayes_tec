@@ -1,3 +1,5 @@
+import matplotlib
+matplotlib.use('agg')
 from ..utils.testing_utils import make_example_datapack
 from ..plotting.plot_datapack import DatapackPlotter, animate_datapack
 import os
