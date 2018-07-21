@@ -30,56 +30,53 @@ def make_coord_array(*X):
     
     return np.reshape(X,(-1,X.shape[-1]))
 
-def weights_and_mean_uncert(Y,N=200,phase_wrap=True, min_uncert=1e-3):
+def _parallel_weights(arg):
+    position, dY2 = arg
+    return np.roll(dY2, position, axis=1)
+
+def calculate_weights(Y,indep_axis=-1, N=200,phase_wrap=True, min_uncert=1e-3, num_threads=None):
     """
     Get a weight matrix for each datapoint in Y using moving average of TD.
-    The values must [N, Nt], Nt is uncorrelated axis
-    Y: array shape [N, Nt], independent axis
-    N : int the window
+    The values must [... , Nt], Nt is uncorrelated axis
+    Y: array shape [... , Nt], independent axis
+    indep_axis: int the axis to do TD down
+    N : int the window size
+    phase_wrap : bool whether to phase wrap differences
+    min_uncert : float the minimum allowed uncertainty
+    num_threads: the number of threads to use, None used ncpu*5
     Returns:
-    weights [N, Nt] and mean_uncert float
+    weights [..., Nt] of same shape and dtype as Y
     """
-    if phase_wrap:
-        dY = wrap(wrap(Y[:,1:]) - wrap(Y[:,:-1]))
-    else:
-        dY = Y[:,1:] - Y[:,:-1]
-
-    dY = np.pad(dY,((0,0),(0,1)),mode='symmetric')
-    dY *= dY
-    uncert = np.zeros_like(Y)
-    for i in range(-(N>>1),N>>1):
-        uncert += np.roll(dY,i,axis=1)
-    uncert /= N
-    uncert = np.sqrt(uncert)
-
-    weights = np.maximum(min_uncert,uncert)
-    weights = 1./weights**2
-    weights[np.isnan(weights)] = 0.01
-    return weights
-
-def _parallel_phase_weights(arg):
-    phase, kwargs = arg
-    w = weights_and_mean_uncert(phase,**kwargs)
-    return w
-
-
-def phase_weights(phase,indep_axis=-1,num_threads=None,**kwargs):
-    """
-    returns the weight matrix for phase
-    phase: array [Nd, Na, Nf, Nt] or [Nd, Nf, Nt]
-    Returns:
-    array same shape as phase
-    """
-    shape = phase.shape
+    shape = Y.shape
     roll_axis=False
     if indep_axis not in [-1, len(shape)-1]:
         roll_axis=True
-        phase = np.swapaxes(phase,indep_axis,len(shape)-1)
-
-    shape_ = phase.shape
+        Y = np.swapaxes(Y,indep_axis,len(shape)-1)
+    shape_ = Y.shape
     #N, Nt
-    phase = phase.reshape((-1, shape_[-1]))
-    weights = weights_and_mean_uncert(phase, **kwargs)
+    Y = Y.reshape((-1, shape_[-1]))
+
+    if phase_wrap:
+        dY2 = wrap(wrap(Y[:,1:]) - wrap(Y[:,:-1]))
+    else:
+        dY2 = Y[:,1:] - Y[:,:-1]
+
+    dY2 = np.pad(dY2,((0,0),(0,1)),mode='symmetric')
+    dY2 *= dY2
+
+    args = []
+    for i in range(-(N>>1),N>>1):
+        args.append((i, dY2))
+
+    with futures.ThreadPoolExecutor(max_workers=num_threads) as executor:
+        jobs = executor.map(_parallel_weights,args)
+        results = list(jobs)# each is N, Nt but rolled
+    
+    var = np.mean(np.stack(results, axis=0),axis=0)
+    var = np.maximum(min_uncert**2, var)
+    weights = 1./var
+
+
     weights = weights.reshape(shape_)
     if roll_axis:
         return np.swapaxes(weights,indep_axis,len(shape)-1)

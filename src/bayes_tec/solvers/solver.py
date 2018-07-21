@@ -1,5 +1,5 @@
 from ..datapack import DataPack
-from ..utils.data_utils import phase_weights, make_data_vec, make_coord_array, define_subsets
+from ..utils.data_utils import calculate_weights, make_data_vec, make_coord_array, define_subsets
 from ..utils.stat_utils import log_normal_solve
 from ..utils.gpflow_utils import train_with_adam, SendSummary, SaveModel
 from ..likelihoods import WrappedPhaseGaussian
@@ -162,7 +162,8 @@ class OverlapPhaseOnlySolver(Solver):
                 Y.append(vals)
                 if reweight_obs:
                     logging.info("Re-calculating weights...")
-                    weights_ = phase_weights(vals,indep_axis = -1, num_threads = None,N=100,phase_wrap=True, min_uncert=1e-3)
+                    smooth_len = int(2 * self.overlap / (axes['time'][1] - axes['time'][0]))
+                    weights_ = calculate_weights(vals,indep_axis = -1, num_threads = None, N=smooth_len, phase_wrap=True, min_uncert=1e-3)
                     self.datapack.__setattr__("weights_{}".format(tab), weights_)
                     weights.append(weights_)
                 else:
@@ -178,8 +179,7 @@ class OverlapPhaseOnlySolver(Solver):
             # Npols, Nd, Na, Nf, Nt, Ntabs
             Y = np.stack(Y,axis=-1)
             weights = np.stack(weights,axis=-1)
-            weights[np.isnan(weights)] = 1.
-            uncert_mean = np.nanmean(1./np.sqrt(weights))
+            uncert_mean = np.mean(1./np.sqrt(weights))
             Npol, Nd, Na, Nf, Nt, Ntabs = Y.shape
             # Nd, Npol*Na*Ntabs, Nf, Nt
             Y = Y.transpose((1,0,2,5, 3,4)).reshape((Nd, Npol*Na*Ntabs, Nf, Nt))
