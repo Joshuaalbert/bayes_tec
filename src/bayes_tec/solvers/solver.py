@@ -180,6 +180,7 @@ class OverlapPhaseOnlySolver(Solver):
             Y = np.stack(Y,axis=-1)
             weights = np.stack(weights,axis=-1)
             uncert_mean = np.mean(1./np.sqrt(weights))
+            weights /= np.mean(weights)
             Npol, Nd, Na, Nf, Nt, Ntabs = Y.shape
             # Nd, Npol*Na*Ntabs, Nf, Nt
             Y = Y.transpose((1,0,2,5, 3,4)).reshape((Nd, Npol*Na*Ntabs, Nf, Nt))
