@@ -88,8 +88,7 @@ def add_args(parser):
 
     required.add_argument("--datapack", type=str,
             help="""Datapack input, a losoto h5parm.""", required=True)
-    required.add_argument("--overlap", type=float, default=90.,
-            help="""Temporal overlap in seconds.""",required=True)
+    
 
     
 
@@ -104,7 +103,8 @@ def add_args(parser):
                         help="""The polarization selection: None, list XX,XY,YX,YY, regex X?, or slice format <start>/<stop>/<step>.\n""")
     optional.add_argument("--freq_sel", type="freq_sel", default=None, 
                         help="""The channel selection: None, or slice format <start>/<stop>/<step>.\n""")
-
+    required.add_argument("--overlap", type=float, default=160.,
+            help="""Temporal overlap in seconds.""",required=True)
     optional.add_argument("--time_skip", type=int, default=2,
                       help="Time skip")
     optional.add_argument("--dof_ratio", type=float, default=40.,
