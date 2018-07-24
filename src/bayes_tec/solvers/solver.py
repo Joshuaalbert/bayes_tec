@@ -54,9 +54,8 @@ class Solver(object):
 
 
 class OverlapPhaseOnlySolver(Solver):
-    def __init__(self, overlap, run_dir, datapack):
+    def __init__(self,  run_dir, datapack):
         super(OverlapPhaseOnlySolver,self).__init__(run_dir,datapack)
-        self.overlap = float(overlap)# minimum overlap in seconds
 #        if not isinstance(tabs,(tuple,list)):
 #            tabs = [tabs]
 #        self.tabs = tabs # ['phase', 'amplitude', ...] etc.
@@ -93,7 +92,7 @@ class OverlapPhaseOnlySolver(Solver):
             likelihood.variance.prior = LogNormal(likelihood_var[0],likelihood_var[1]**2)
             likelihood.variance.set_trainable(True)
             def _kern():
-                kern_time = Matern52(1,active_dims=[0])
+                kern_time = Matern32(1,active_dims=[2])
                 kern_time.lengthscales = np.exp(tec_kern_time_ls[0])
                 kern_time.lengthscales.set_trainable(True)
                 kern_time.lengthscales.prior = LogNormal(tec_kern_time_ls[0],tec_kern_time_ls[1]**2)#gamma_prior(70./t_std, 50./t_std)
@@ -101,7 +100,7 @@ class OverlapPhaseOnlySolver(Solver):
                 kern_time.variance.set_trainable(True)
                 kern_time.variance.prior = LogNormal(tec_kern_var[0],tec_kern_var[1]**2)#gamma_prior(0.001, 0.005)
 
-                kern_space = Matern52(2,active_dims=[1,2],variance=1.)
+                kern_space = Matern52(2,active_dims=[0,1],variance=1.)
                 kern_space.variance.set_trainable(False)
                 kern_space.lengthscales = np.exp(tec_kern_dir_ls[0])
                 kern_space.lengthscales.set_trainable(True)
@@ -145,7 +144,7 @@ class OverlapPhaseOnlySolver(Solver):
 
     def run(self, ant_sel=None, time_sel=None, dir_sel=None, freq_sel=None, pol_sel=None,reweight_obs=True, 
             screen_res=30, jitter=1e-6, learning_rate=1e-3, iterations=10000, minibatch_size=128, 
-            eval_freq=140e6, dof_ratio=35., max_block_size=800, tec_scale = 0.01, time_skip=3, 
+            eval_freq=140e6, dof_ratio=35., max_block_size=800, overlap = 180., tec_scale = 0.01, time_skip=3, 
             intra_op_threads=0, inter_op_threads=0, shared_kernels=True, shared_features=True, **kwargs):
 
         settings.numerics.jitter = jitter
