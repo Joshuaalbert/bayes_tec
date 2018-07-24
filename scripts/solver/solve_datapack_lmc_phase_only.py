@@ -1,10 +1,12 @@
 #!/usr/bin/env python
-from bayes_tec.datapack import DataPack
-from bayes_tec.plotting.plot_datapack import animate_datapack
-import argparse
 
-def run_plot(datapack, output_folder, num_processes, ant_sel, time_sel, freq_sel, pol_sel, dir_sel):
-    animate_datapack(datapack,output_folder, num_processes, labels_in_radec=True, plot_crosses=False, ant=ant_sel, dir=dir_sel, freq=freq_sel, pol=pol_sel)
+from bayes_tec.solvers.phase_only_lmc_solver import LMCPhaseOnlySolver
+import argparse
+import os
+
+def run_solve(flags):
+    solver = LMCPhaseOnlySolver(flags.run_dir, flags.datapack)
+    solver.run(**vars(flags))
 
 def add_args(parser):
     def _time_sel(s):
@@ -88,6 +90,9 @@ def add_args(parser):
 
     required.add_argument("--datapack", type=str,
             help="""Datapack input, a losoto h5parm.""", required=True)
+    
+
+    
 
     # network
     optional.add_argument("--ant_sel", type="ant_sel", default=None, 
@@ -100,15 +105,53 @@ def add_args(parser):
                         help="""The polarization selection: None, list XX,XY,YX,YY, regex X?, or slice format <start>/<stop>/<step>.\n""")
     optional.add_argument("--freq_sel", type="freq_sel", default=None, 
                         help="""The channel selection: None, or slice format <start>/<stop>/<step>.\n""")
+    optional.add_argument("--dof_ratio", type=float, default=40.,
+                       help="""The ratio of temporal-spatial coordinates to degrees of freedom.""")
+    optional.add_argument("--minibatch_size", type=int, default=256,
+                      help="Size of minibatch")
+    optional.add_argument("--learning_rate", type=float, default=1e-3,
+                      help="learning rate")
+    optional.add_argument("--plot", type="bool", default=True, const=True,nargs='?',
+                      help="Whether to plot results")
+    optional.add_argument("--run_dir", type=str, default='./run_dir', 
+                      help="Where to run the solve")
+    optional.add_argument("--iterations", type=int, default=10000, 
+                      help="How many iterations to run")
+    optional.add_argument("--jitter", type=float, default=1e-6, 
+                      help="Jitter for stability")
+    optional.add_argument("--eval_freq", type=float, default=144e6, 
+                      help="Eval frequency")
+    optional.add_argument("--reweight_obs", type="bool", default=True, 
+                      help="Whether to re-calculate the weights down the frequency axis. Otherwise use /weight table.")
+    optional.add_argument("--inter_op_threads", type=int, default=0,
+                       help="""The max number of concurrent threads""")
+    optional.add_argument("--intra_op_threads", type=int, default=0,
+                       help="""The number threads allowed for multi-threaded ops.""")
+    optional.add_argument("--tec_scale", type=float, default=0.01,
+                       help="""The relative tec scale used for scaling the GP model for computational stability.""")
+    optional.add_argument("--max_block_size", type=int, default=500,
+                       help="""Maximum number of timestamps per block solve.""")
+    required.add_argument("--overlap", type=float, default=160.,
+            help="""Temporal overlap in seconds.""",required=True)
+    optional.add_argument("--time_skip", type=int, default=2,
+                      help="Time skip")
 
-    optional.add_argument("--num_processes", type=int, default=1,
-                      help="Number of parallel plots")
-    optional.add_argument("--output_folder", type=str, default="./figs",
-                       help="""The output folder.""")
+    
+
+
 
 if __name__=='__main__':
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     add_args(parser)
     flags, unparsed = parser.parse_known_args()
-    run_plot(**vars(flags))
+    run_solve(flags)
+
+
+
+
+
+
+
+            
+                
 

@@ -1,3 +1,5 @@
+#!/usr/bin/env python
+
 from bayes_tec.solvers.solver import OverlapPhaseOnlySolver
 import argparse
 import os
