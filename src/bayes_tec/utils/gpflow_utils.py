@@ -30,11 +30,12 @@ class SendSummary(Action):
         self.scalar_summary = tf.summary.merge(scalar_summaries)
 
         # Add non-scalar parameters
-        hist_summaries = [tf.summary.histogram(p.pathname, p.constrained_tensor)
-                          for p in parameters if p.size > 1]
-        self.hist_summary = tf.summary.merge(hist_summaries)
+        hist_summaries = tf.summary.merge([tf.summary.histogram(model.q_mu.constrained_tensor), tf.summary.histogram(model.q_sqrt.unconstrained_tensor)])
+#        hist_summaries = [tf.summary.histogram(p.pathname, p.constrained_tensor)
+#                          for p in parameters if p.size > 1]
+#        self.hist_summary = tf.summary.merge(hist_summaries)
 
-        self.summary = self.scalar_summary#tf.summary.merge([self.scalar_summary,self.hist_summary])
+        self.summary = tf.summary.merge([self.scalar_summary,self.hist_summary])
 
         
     def run(self, ctx):
