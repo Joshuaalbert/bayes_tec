@@ -5,8 +5,9 @@ from gpflow import settings
 float_type = settings.float_type
 
 class HomoscedasticPhaseOnlySVGP(SVGP):
-    def __init__(self,*args, **kwargs):
+    def __init__(self,P,*args, **kwargs):
         super(HomoscedasticPhaseOnlySVGP, self).__init__(*args, **kwargs)
+        self.P = P
 
     @params_as_tensors
     def _build_likelihood(self):
@@ -18,16 +19,17 @@ class HomoscedasticPhaseOnlySVGP(SVGP):
         KL = self.build_prior_KL()
 
         # Get conditionals
-        fmean, fvar = self._build_predict(self.X, full_cov=False)
+        fmean, fvar = self._build_predict(self.X, full_cov=False, full_output_cov=False)
 
         # Get variational expectations.
         freqs = self.Y[:,-1:] # N, 1
         # tile to matach Y
-        freqs = tf.tile(freqs,(1, self.num_latent))# N, num_latent
-        Y = self.Y[:,:self.num_latent] #N, num_latent
+        freqs = tf.tile(freqs,(1, self.P))# N, num_latent
+        Y = self.Y[:,:self.P] #N, num_latent
+        Y = tf.Print(Y,[tf.shape(Y),tf.shape(freqs),tf.shape(fmean),tf.shape(fvar)])
         var_exp = self.likelihood.variational_expectations(fmean, fvar, Y, freqs = freqs)
 
-        weights = self.Y[:,self.num_latent:2*self.num_latent]
+        weights = self.Y[:,self.P:2*self.P]
         var_exp = var_exp * weights
 
         # re-scale for minibatch sizenum_gauss_hermite_points
@@ -60,7 +62,8 @@ class HomoscedasticPhaseOnlySVGP(SVGP):
         Fmean, Fvar = self._build_predict(Xnew, full_cov=False, full_output_cov=False)
         # Get variational expectations.
         freqs = Ynew[:,-1:] # N, 1
+
         # tile to matach Y
-        freqs = tf.tile(freqs,(1, self.num_latent))# N, num_latent
-        l = self.likelihood.predict_density(Fmean, Fvar, Ynew[:,:self.num_latent], freqs=freqs)
+        freqs = tf.tile(freqs,(1, self.P))# N, num_latent
+        l = self.likelihood.predict_density(Fmean, Fvar, Ynew[:,:self.P], freqs=freqs)
         return l 

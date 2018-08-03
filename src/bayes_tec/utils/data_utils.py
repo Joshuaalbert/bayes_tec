@@ -123,11 +123,41 @@ def define_subsets(X_t, overlap, max_block_size):
     Returns:
     list of int, The edges
     """
+    assert overlap < X_t[-1,0] - X_t[0,0]
+    dt = X_t[1,0] - X_t[0,0]
+    max_block_size = int(max_block_size)
+    
+    M = int(np.ceil(X_t.shape[0]/max_block_size))
+
+    edges = np.linspace(X_t[0,0],X_t[-1,0],M+1)
+    
+    edges_idx = np.searchsorted(X_t[:,0],edges)
+    starts = edges_idx[:-1]
+    stops = edges_idx[1:]
+    for s1,s2 in zip(starts,stops):
+        assert X_t[s2,0] - X_t[s1,0] >= 3*overlap, "Overlap ({}) -> {} and max_block_size ({}) incompatible".format(overlap,overlap/dt,max_block_size)
+    return starts,stops
+
+def _old_define_subsets(X_t, overlap, max_block_size):
+    """
+    Define the subsets of X_t with minimum overlap size blocks, 
+    as a set of edges.
+    X_t :array (N,1)
+        times
+    overlap : float
+    max_block_size : int
+        The max number of points per block
+    Returns:
+    list of int, The edges
+    """
+    max_block_size = int(max_block_size)
     dt = X_t[1,0] - X_t[0,0]
     T = X_t[-1,0] - X_t[0,0]
     N = int(np.ceil(overlap / dt))
+    assert N < max_block_size, "overlap ({}) larger than max_block_size ({})".format(N, max_block_size)
+    assert N < X_t.shape[0], "overlap requested ({}) requested larger than full time range ({})".format(N,X_t.shape[0])
     edges = list(range(0,X_t.shape[0],N))
-    edges[-1] = X_t.shape[0] - 1
+    edges[-1] = X_t.shape[0]-1
 
     block_size = edges[1] - edges[0]
     max_blocks = max_block_size // block_size
@@ -138,7 +168,8 @@ def define_subsets(X_t, overlap, max_block_size):
     while block_start + max_blocks < len(edges):
         blocks.append((block_start, block_start + max_blocks))
         block_start = block_start + max_blocks - 1
-    blocks.append((block_start, len(edges) -1))
+    blocks.append(blocks[-1])
+#    blocks.append((block_start, len(edges) -1))
     for b in blocks:
         if b[1] - b[0] < 3:
             return define_subsets(X_t, overlap+1,max_block_size)

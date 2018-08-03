@@ -25,15 +25,19 @@ class SendSummary(Action):
         # Add scalar parameters
         scalar_summaries = [tf.summary.scalar(p.pathname, tf.reshape(p.constrained_tensor, []))
                           for p in parameters if p.size == 1]
+
         scalar_summaries.append(tf.summary.scalar("optimisation/likelihood",
                                                self.model._likelihood_tensor))
         self.scalar_summary = tf.summary.merge(scalar_summaries)
 
         # Add non-scalar parameters
-        hist_summaries = tf.summary.merge([tf.summary.histogram(model.q_mu.constrained_tensor), tf.summary.histogram(model.q_sqrt.unconstrained_tensor)])
-#        hist_summaries = [tf.summary.histogram(p.pathname, p.constrained_tensor)
-#                          for p in parameters if p.size > 1]
-#        self.hist_summary = tf.summary.merge(hist_summaries)
+#        self.hist_summary = tf.summary.merge([
+#            tf.summary.histogram('q_mu',model.q_mu.constrained_tensor), 
+#            tf.summary.histogram('q_sqrt',model.q_sqrt.unconstrained_tensor)
+#            ])
+        hist_summaries = [tf.summary.histogram(p.pathname, p.constrained_tensor)
+                          for p in parameters if p.size > 1]
+        self.hist_summary = tf.summary.merge(hist_summaries)
 
         self.summary = tf.summary.merge([self.scalar_summary,self.hist_summary])
 
