@@ -7,11 +7,31 @@ def test_define_subsets():
     X_t = np.linspace(0,800,100)[:,None]
     overlap = 32
     max_block_size = 20
-    edges, blocks = define_subsets(X_t, overlap, max_block_size)
-    for b in blocks:
-        assert b[1] - b[0] >= 3
-    assert len(edges)-1 in [b[1] for b in blocks]
+    starts, stops = define_subsets(X_t, overlap, max_block_size)
+    assert (X_t[stops,0]-X_t[starts,0] > overlap).all()
+    assert 0 in starts
+    assert X_t.shape[0] - 1 in stops
 
+
+    
+    overlap = 32
+    max_block_size = 200
+    starts, stops = define_subsets(X_t, overlap, max_block_size)
+    assert (X_t[stops,0]-X_t[starts,0] > overlap).all()
+    assert 0 in starts
+    assert X_t.shape[0] - 1 in stops
+
+    
+    
+    
+    overlap = 32
+    max_block_size = 100
+    starts, stops = define_subsets(X_t, overlap, max_block_size)
+    assert (X_t[stops,0]-X_t[starts,0] > overlap).all()
+    assert 0 in starts
+    assert X_t.shape[0] - 1 in stops
+
+    
 def test_make_example_datapack():
     datapack = make_example_datapack(10,4, 100, name='datapack_test_utils.hdf5')
     with datapack:
