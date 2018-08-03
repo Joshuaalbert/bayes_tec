@@ -54,7 +54,7 @@ class PhaseOnlySolver(Solver):
         raise NotImplementedError("must subclass")
 
     
-    def _solve(X_d, X_t, freqs, X_d_screen, Y, weights, **kwargs):
+    def _solve(self,X_d, X_t, freqs, X_d_screen, Y, weights, **kwargs):
         """
         Defines the solve steps and runs them.
         It must include:
