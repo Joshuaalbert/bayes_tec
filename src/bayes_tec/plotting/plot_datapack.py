@@ -178,19 +178,19 @@ class DatapackPlotter(object):
             #ants_uvw = antennas.transform_to(uvw)
 
             ref_dist = np.sqrt((antennas.x - antennas_.x)**2 + (antennas.y - antennas_.y)**2 + (antennas.z - antennas_.z)**2).to(au.km).value
-            if labels_in_radec:
-                ra = directions.ra.deg
-                dec = directions.dec.deg
-                points = np.array([ra,dec]).T
-            else:
-                fixtime = times[0]
-                phase_center = self.datapack.pointing_center
-                array_center = self.datapack.array_center
-                uvw = UVW(location = array_center.earth_location,obstime = fixtime,phase = phase_center)
-                dirs_uvw = directions.transform_to(uvw)
-                u_rad = np.arctan2(dirs_uvw.u.value,dirs_uvw.w.value)
-                v_rad = np.arctan2(dirs_uvw.v.value,dirs_uvw.w.value)
-                points = np.array([u_rad,v_rad]).T
+#            if labels_in_radec:
+            ra = directions.ra.deg
+            dec = directions.dec.deg
+            points = np.array([ra,dec]).T
+#            else:
+#                fixtime = times[0]
+#                phase_center = self.datapack.pointing_center
+#                array_center = self.datapack.array_center
+#                uvw = UVW(location = array_center.earth_location,obstime = fixtime,phase = phase_center)
+#                dirs_uvw = directions.transform_to(uvw)
+#                u_rad = np.arctan2(dirs_uvw.u.value,dirs_uvw.w.value)
+#                v_rad = np.arctan2(dirs_uvw.v.value,dirs_uvw.w.value)
+#                points = np.array([u_rad,v_rad]).T
 
         if fignames is not None:
             if not isinstance(fignames,(tuple,list)):
@@ -275,6 +275,9 @@ def animate_datapack(datapack,output_folder,num_processes,**kwargs):
         os.makedirs(output_folder)
     except:
         pass
+
+    if isinstance(datapack,DataPack):
+        datapack = datapack.filename
 
     with DataPack(datapack) as datapack_fix:
         datapack_fix.add_antennas(DataPack.lofar_array)
