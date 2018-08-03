@@ -330,8 +330,9 @@ class DataPack(object):
                 else:
                     soltab.setSelection(**self._selection)
                 if not axes:
-                    return soltab.getValues(reference=np.array(self.ref_ant).astype(np.str_),
-                                weight=weight)
+                    dtype = type(soltab.getAxisValues('ant', ignoreSelection=True).tolist()[0])
+                    return soltab.getValues(reference=np.array(self.ref_ant).astype(dtype),
+                               weight=weight)
                 else:
                     axisVals = {}
                     for axis in soltab.getAxesNames():
@@ -385,4 +386,3 @@ class DataPack(object):
         
     def select_all(self):
         self._selection = None
-    
