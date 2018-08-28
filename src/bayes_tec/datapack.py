@@ -312,7 +312,7 @@ class DataPack(object):
         """
 #        with self:
 #            tabs = self._solset.getSoltabNames()
-        tabs = ['phase','amplitude','tec']
+        tabs = ['phase','amplitude','tec','scalarphase']
         tabs = ["weights_{}".format(t) for t in tabs] + ["axes_{}".format(t) for t in tabs] + tabs
         weight = False
         axes = False
@@ -355,7 +355,7 @@ class DataPack(object):
         
 #        with self:
 #            tabs = self._solset.getSoltabNames()
-        tabs = ['phase','amplitude','tec']
+        tabs = ['phase','amplitude','tec','scalarphase']
         tabs = ["weights_{}".format(t) for t in tabs] + ["axes_{}".format(t) for t in tabs] + tabs
         weight = False
         axes = False
