@@ -26,7 +26,6 @@ class HomoscedasticPhaseOnlySVGP(SVGP):
         # tile to matach Y
         freqs = tf.tile(freqs,(1, self.P))# N, num_latent
         Y = self.Y[:,:self.P] #N, num_latent
-        Y = tf.Print(Y,[tf.shape(Y),tf.shape(freqs),tf.shape(fmean),tf.shape(fvar)])
         var_exp = self.likelihood.variational_expectations(fmean, fvar, Y, freqs = freqs)
 
         weights = self.Y[:,self.P:2*self.P]
