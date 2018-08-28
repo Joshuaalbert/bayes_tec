@@ -24,12 +24,15 @@ Bayesian model for directional and temporal TEC model for phase-wrapped phase sc
   # or if you did not add the alias
   source activate bayestf
   ```
-2. Install our modified `GPflow` repo and this repo
-  - Get the git
+2. Install
+  - Get our modified `GPflow` repo
   ``` bash
   cd ~/git
   git clone https://github.com/Joshuaalbert/GPflow.git
   cd GPflow; python setup.py install; cd ..
+  ```
+  - This repo
+  ``` bash
   git clone https://github.com/Joshuaalbert/bayes_tec.git
   cd bayes_tec; pip install -r pip-requirements.txt
   ```
