@@ -37,13 +37,16 @@ def import_data(ndppp_dd_sols, out_datapack, clobber,ant_sel, time_sel, freq_sel
             out.add_sources(directions, patch_names=patch_names)
             
             tec,axes = f_dd.tec#(npol), nt, na, nd,1
+            scalarphase,axes = f_dd.scalarphase#(npol), nt, na, nd,1
             
             if 'pol' in axes.keys():#(1,3595,62,1,42,1)
                 tec = tec[...,0].transpose((0,3,2,1))#npol,nd,na,nt
-                phase = tec_conversion*tec[:,:,:,None,:]/freqs[None,None,None,:,None]
+                scalarphase = scalarphase[...,0].transpose((0,3,2,1))#npol,nd,na,nt
+                phase = tec_conversion*tec[:,:,:,None,:]/freqs[None,None,None,:,None] + scalarphase[:,:,:,None,:]
             else:
                 tec = tec[...,0].transpose((2,1,0))#nd,na,nt
-                phase = tec_conversion*tec[None,:,:,None,:]/freqs[None,None,None,:,None]
+                scalarphase = scalarphase[...,0].transpose((2,1,0))#nd,na,nt
+                phase = tec_conversion*tec[None,:,:,None,:]/freqs[None,None,None,:,None] + scalarphase[None,:,:,None,:]
                 axes['pol'] = ['XX']
                 
             out.add_freq_dep_tab('phase', axes['time'], freqs, pols=axes['pol'], ants = axes['ant'], 
