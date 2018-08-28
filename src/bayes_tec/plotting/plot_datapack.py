@@ -4,6 +4,7 @@ import os
 from concurrent import futures
 from ..datapack import DataPack
 from ..frames import UVW
+from ..logging import logging
 import astropy.coordinates as ac
 import astropy.time as at
 import astropy.units as au
@@ -12,7 +13,9 @@ from matplotlib.patches import Polygon, Rectangle
 from matplotlib.collections import PatchCollection
 import matplotlib.colors as colors
 import matplotlib
+#matplotlib.use('Agg')
 import time
+from scipy.spatial.distance import pdist
 
 
 try:
@@ -35,7 +38,9 @@ class DatapackPlotter(object):
         k = cKDTree(points)
         dx = np.max(points[:,0]) - np.min(points[:,0])
         dy = np.max(points[:,1]) - np.min(points[:,1])
-        N = N or int(min(max(100,points.shape[0]*2),500))
+        delta = pdist(points)
+
+        N = N or int(min(max(100,2*np.max(delta)/np.min(delta)),500))
         x = np.linspace(np.min(points[:,0])-0.1*dx,np.max(points[:,0])+0.1*dx,N)
         y = np.linspace(np.min(points[:,1])-0.1*dy,np.max(points[:,1])+0.1*dy,N)
         X,Y = np.meshgrid(x,y,indexing='ij')
@@ -48,13 +53,17 @@ class DatapackPlotter(object):
         patches = []
         for group in range(points.shape[0]):
             points_g = points_i[i==group,:]
-            hull = ConvexHull(points_g)
-            nodes = points_g[hull.vertices,:]
-            poly = Polygon(nodes,closed=False)
+            if points_g.size == 0:
+                logging.debug("Facet {} has zero size".format(group))
+                poly = Polygon(points[group:group+1,:],closed=False)
+            else:
+                hull = ConvexHull(points_g)
+                nodes = points_g[hull.vertices,:]
+                poly = Polygon(nodes,closed=False)
             patches.append(poly)
         if ax is None:
             fig,ax = plt.subplots()
-            print("Making new plot")
+            logging.info("Making new plot")
         if values is None:
             values = np.zeros(len(patches))#random.uniform(size=len(patches))
         p = PatchCollection(patches,cmap=cmap)
@@ -94,7 +103,7 @@ class DatapackPlotter(object):
             assert n**2 == points.shape[0]
         if ax is None:
             fig,ax = plt.subplots()
-            print("Making new plot")
+            logging.info("Making new plot")
         if values is None:
             values = np.zeros([n,m])
         x = np.linspace(np.min(points[:,0]),np.max(points[:,0]),m)
@@ -133,7 +142,7 @@ class DatapackPlotter(object):
         if plot_patchnames or plot_facet_idx:
             plot_crosses = False
         if not show:
-            print('turning off display')
+            logging.debug('turning off display')
             matplotlib.use('Agg')
 
         ###
@@ -182,6 +191,7 @@ class DatapackPlotter(object):
             ra = directions.ra.deg
             dec = directions.dec.deg
             points = np.array([ra,dec]).T
+
 #            else:
 #                fixtime = times[0]
 #                phase_center = self.datapack.pointing_center
@@ -237,7 +247,7 @@ class DatapackPlotter(object):
                 plt.ion()
                 plt.show()
             for j in range(Nt):
-                print("Plotting {}".format(timestamps[j]))
+                logging.info("Plotting {}".format(timestamps[j]))
                 for i in range(Na):
                     axes_patches[i].set_array(obs[:,i,fixfreq,j])
                 axs[0,0].set_title("{} {} : {}".format(observable, freq_labels[fixfreq], timestamps[j]))
@@ -295,7 +305,7 @@ def make_animation(datafolder,prefix='fig',fps=4):
     video at framerate `fps`.
     Output is datafolder/animation.mp4'''
     if os.system('ffmpeg -framerate {} -i {}/{}-%04d.png -vf scale="trunc(iw/2)*2:trunc(ih/2)*2" -c:v libx264 -profile:v high -pix_fmt yuv420p -g 30 -r 30 {}/animation.mp4'.format(fps,datafolder,prefix,datafolder)):
-        print("{}/animation.mp4 exists already".format(datafolder))    
+        logging.info("{}/animation.mp4 exists already".format(datafolder))    
 
 
 
