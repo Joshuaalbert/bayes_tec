@@ -11,7 +11,7 @@ def test():
 #    dp.plot(time=slice(0,10),labels_in_radec=True,show=True)
 
     animate_datapack('plotting_test_datapack.hdf5',
-            'output_folder_test_plotting',num_processes=1,time_sel=slice(0,10,2),observable='phase',labels_in_radec=True,show=False)
+            'output_folder_test_plotting',num_processes=1,ant_sel="RS*",time_sel=slice(0,10,1),observable='phase',labels_in_radec=True,show=False)
     os.unlink('plotting_test_datapack.hdf5')
 
 
