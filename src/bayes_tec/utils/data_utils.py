@@ -111,6 +111,102 @@ def make_data_vec(Y,freqs,weights=None):
     # ..., Nf, 2*N+1
     return np.concatenate([Y, weights, freqs],axis=-1)
 
+
+
+def define_equal_subsets(N,max_block_size, min_overlap,verbose=False):
+    """
+    Break an abscissa into equal overlaping regions using modular arithmetic.
+    Args:
+    N : int length of abscisa
+    max_block_size : int maximal size of partitions
+    min_overlap : int minimum overlap in units of elements
+    verbose: bool print the options
+
+    Returns:
+    blocks, val_blocks which are lists of (start,end) tuples that can be used to 
+    construct slices of time blocks.
+    """
+
+    def xgcd(b, a):
+        x0, x1, y0, y1 = 1, 0, 0, 1
+        while a != 0:
+            q, b, a = b // a, a, b % a
+            x0, x1 = x1, x0 - q * x1
+            y0, y1 = y1, y0 - q * y1
+        return  b, x0, y0
+
+    def mulinv(b, n):
+        g, x, _ = xgcd(b, n)
+        if g == 1:
+            return x % n
+
+    res = []
+    for n in range(1,N):
+        a = -2*n
+        b = n+1
+        ainv = mulinv(a,b)
+        if ainv is None:
+            continue
+        O = (ainv * N) % b
+        B = (N - a*O)//b
+        if B <= max_block_size and O >= min_overlap and B - 2*O > 0:
+            res.append((n,B,O))
+
+    if len(res) == 0:
+        raise ValueError("Incompatible max blocksize and min overlap. Try raising or lowering respectively.")
+    possible = np.array(res)
+
+    ##
+    # selection
+    min_n = np.argmin(possible[:,0])
+    res = possible[min_n,:]
+    if verbose:
+        verb = "\n".join(["  {:3d}|{:3d}|{:3d}".format(*r) if not np.all(r == res) else ">>{:3d}|{:3d}|{:3d}".format(*r) for r in possible])
+        logging.warning("Available configurations:\n  ( n|  B| overlap )\n{}".format(verb))
+
+    blocks, val_blocks = [],[]
+    start=0
+    i = 0
+    n,B,O = res
+    while i <= n:
+        blocks.append((i*B - i*2*O, (i+1)*B - i*2*O))
+        if i == 0:
+            val_blocks.append((blocks[-1][0], blocks[-1][1]-O))
+        elif i == n:
+            val_blocks.append((blocks[-1][0] + O, blocks[-1][1]))
+        else:
+            val_blocks.append((blocks[-1][0] + O, blocks[-1][1] - O))
+        i += 1
+    return blocks, val_blocks
+
+def define_equal_subsets(X_t, overlap, max_block_size):
+    """
+    Define the subsets of X_t with minimum overlap size blocks, 
+    as a set of edges.
+    X_t :array (N,1)
+        times
+    overlap : float
+    max_block_size : int
+        The max number of points per block
+    Returns:
+    list of int, The edges
+    """
+    assert overlap < X_t[-1,0] - X_t[0,0]
+    dt = X_t[1,0] - X_t[0,0]
+    max_block_size = int(max_block_size)
+    
+    M = int(np.ceil(X_t.shape[0]/max_block_size))
+
+    edges = np.linspace(X_t[0,0],X_t[-1,0],M+1)
+    
+    edges_idx = np.searchsorted(X_t[:,0],edges)
+    starts = edges_idx[:-1]
+    stops = edges_idx[1:]
+    for s1,s2 in zip(starts,stops):
+        assert X_t[s2,0] - X_t[s1,0] >= 3*overlap, "Overlap ({}) -> {} and max_block_size ({}) incompatible".format(overlap,overlap/dt,max_block_size)
+    return starts,stops
+
+
 def define_subsets(X_t, overlap, max_block_size):
     """
     Define the subsets of X_t with minimum overlap size blocks, 
