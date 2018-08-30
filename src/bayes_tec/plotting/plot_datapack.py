@@ -1,4 +1,5 @@
 import pylab as plt
+plt.style.use('ggplot')
 import numpy as np
 import os
 from concurrent import futures
@@ -78,6 +79,7 @@ class DatapackPlotter(object):
             ax.set_xlim([np.min(points_i[:,0]),np.max(points_i[:,0])])
         ax.set_ylim([np.min(points_i[:,1]),np.max(points_i[:,1])])
         ax.set_facecolor('black')
+        ax.grid(b=True,color='black')
         if title is not None:
             if reverse_x:
                 ax.text(np.max(points_i[:,0])-0.05*dx,np.max(points_i[:,1])-0.05*dy,title,ha='left',va='top',backgroundcolor=(1.,1.,1., 0.5))
@@ -125,7 +127,7 @@ class DatapackPlotter(object):
         return ax, img
 
 
-    def plot(self, ant=None,time=None,freq=None,dir=None,pol=None, fignames=None, vmin=None,vmax=None,mode='perantenna',observable='phase',phase_wrap=True, log_scale=False, plot_crosses=True,plot_facet_idx=False,plot_patchnames=False,labels_in_radec=False,show=False, plot_arrays=False, **kwargs):
+    def plot(self, ant_sel=None,time_sel=None,freq_sel=None,dir_sel=None,pol_sel=None, fignames=None, vmin=None,vmax=None,mode='perantenna',observable='phase',phase_wrap=True, log_scale=False, plot_crosses=True,plot_facet_idx=False,plot_patchnames=False,labels_in_radec=False,show=False, plot_arrays=False, **kwargs):
         """
         Plot datapack with given parameters.
         """
@@ -149,7 +151,7 @@ class DatapackPlotter(object):
         # Set up plotting
 
         with self.datapack:
-            self.datapack.select(ant=ant,time=time,freq=freq,dir=dir,pol=pol)
+            self.datapack.select(ant=ant_sel,time=time_sel,freq=freq_sel,dir=dir_sel,pol=pol_sel)
             obs,axes = self.datapack.__getattr__(observable)
             if observable.startswith('weights_'):
                 obs = np.sqrt(1./obs) #uncert from weights = 1/var
@@ -207,6 +209,7 @@ class DatapackPlotter(object):
                 fignames = [fignames]
         if fignames is not None:
             assert Nt == len(fignames)
+        print(timestamps, times,axes)
 
 
         if mode == 'perantenna':
@@ -240,8 +243,8 @@ class DatapackPlotter(object):
                     axes_patches.append(p)
                     c += 1
             
-            fig.subplots_adjust(right=0.8)
-            cbar_ax = fig.add_axes([0.85, 0.15, 0.05, 0.7])
+            fig.subplots_adjust(right=0.85)
+            cbar_ax = fig.add_axes([0.875, 0.15, 0.025, 0.7])
             fig.colorbar(p, cax=cbar_ax, orientation='vertical')
             if show:
                 plt.ion()
@@ -264,11 +267,12 @@ def _parallel_plot(arg):
     dp = DatapackPlotter(datapack=datapack)
     with dp.datapack:
         # Get the time selection desired
-        dp.datapack.select(time=kwargs.get('time',None))
+        dp.datapack.select(time=kwargs.get('time_sel',None))
         axes = dp.datapack.axes_phase
     # timeslice the selection 
     times = axes['time']#mjs
-    kwargs['time'] = time_slice
+    sel_list = times[time_slice]
+    kwargs['time_sel'] = sel_list
     fignames = [os.path.join(output_folder,"fig-{:04d}.png".format(j)) for j in range(len(times))[time_slice]]
     dp.plot(fignames=fignames,**kwargs)
     return fignames
