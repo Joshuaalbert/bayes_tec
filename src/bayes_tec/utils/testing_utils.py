@@ -47,7 +47,7 @@ def make_example_datapack(Nd,Nf,Nt,pols=None, time_corr=50.,dir_corr=0.5*np.pi/1
         if not use_pols:
             phase = phase[0,...]
             pols = None
-        datapack.add_freq_dep_tab('phase',times=times,freqs=freqs,pols=pols,vals=phase)
+        datapack.add_freq_dep_tab('phase',times=times[:,0],freqs=freqs,pols=pols,vals=phase)
         datapack.phase = phase
         return datapack
 
