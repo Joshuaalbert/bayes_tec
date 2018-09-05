@@ -34,7 +34,7 @@ class DatapackPlotter(object):
             datapack = DataPack(filename=datapack,readonly=True)
         self.datapack = datapack
     
-    def _create_polygon_plot(self,points, values=None, N = None,ax=None,cmap=plt.cm.bone,overlay_points=True,title=None,polygon_labels=None,reverse_x=False):
+    def _create_polygon_plot(self,points, values=None, N = None,ax=None,cmap=plt.cm.bone,overlay_points=None,title=None,polygon_labels=None,reverse_x=False):
         # get nearest points (without odd voronoi extra regions)
         k = cKDTree(points)
         dx = np.max(points[:,0]) - np.min(points[:,0])
@@ -71,8 +71,8 @@ class DatapackPlotter(object):
         p.set_array(values)
         ax.add_collection(p)
         #plt.colorbar(p)
-        if overlay_points:
-            ax.scatter(points[:,0],points[:,1],marker='+',c='black')
+        if overlay_points is not None:
+            ax.scatter(overlay_points[:,0],overlay_points[:,1],marker='+',c='black')
         if reverse_x:
             ax.set_xlim([np.max(points_i[:,0]),np.min(points_i[:,0])])
         else:
@@ -90,44 +90,43 @@ class DatapackPlotter(object):
 #            ax.annotate(title,xy=(0.8,0.8),xycoords='axes fraction')
         return ax, p
     
-    def _create_image_plot(self,points, values=None, N = None,ax=None,cmap=plt.cm.bone,overlay_points=True,title=None,polygon_labels=None,reverse_x=False):
+    def _create_image_plot(self,points, values=None, N = None,ax=None,cmap=plt.cm.bone,overlay_points=None,title=None,reverse_x=False):
         '''
         Create initial plot, with image data instead of polygons.
-        points: the locations of values, if values is None assume points are squared.
+        points: (ra, dec) 
         values: array [n, m] or None, assumes (dec, ra) ordering ie (y,x)
         '''
-        dx = np.max(points[:,0]) - np.min(points[:,0])
-        dy = np.max(points[:,1]) - np.min(points[:,1])
+        dx = np.max(points[0]) - np.min(points[0])
+        dy = np.max(points[1]) - np.min(points[1])
         if values is not None:
-            n,m = values.shape
+            Ndec,Nra = values.shape
         else:
-            n=m=int(np.sqrt(points.shape[0]))
-            assert n**2 == points.shape[0]
+            Ndec,Nra = len(points[1]),len(points[0])
+            values = np.zeros([Ndec,Nra])
         if ax is None:
             fig,ax = plt.subplots()
             logging.info("Making new plot")
-        if values is None:
-            values = np.zeros([n,m])
-        x = np.linspace(np.min(points[:,0]),np.max(points[:,0]),m)
-        y = np.linspace(np.min(points[:,1]),np.max(points[:,1]),n)
-        img = ax.imshow(values,origin='lower',extent=(x[0],x[-1],y[0],y[-1]))
-        if overlay_points:
-            ax.scatter(points[:,0],points[:,1],marker='+',c='black')
+            
+        x = np.linspace(np.min(points[0]),np.max(points[0]),Nra)
+        y = np.linspace(np.min(points[1]),np.max(points[1]),Ndec)
+        img = ax.imshow(values,origin='lower',cmap=cmap, aspect='auto', extent=(x[0],x[-1],y[0],y[-1]))
+        if overlay_points is not None:
+            ax.scatter(overlay_points[:,0],overlay_points[:,1],marker='+',c='black')
         if reverse_x:
-            ax.set_xlim([np.max(points_i[:,0]),np.min(points_i[:,0])])
+            ax.set_xlim([x[-1],x[0]])
         else:
-            ax.set_xlim([np.min(points_i[:,0]),np.max(points_i[:,0])])
-        ax.set_ylim([np.min(points_i[:,1]),np.max(points_i[:,1])])
+            ax.set_xlim([x[0],x[-1]])
+        ax.set_ylim([y[0],y[-1]])
         ax.set_facecolor('black')
+        ax.grid(b=True,color='black')
         if title is not None:
             if reverse_x:
-                ax.text(np.max(points[:,0])-0.05*dx,np.max(points[:,1])-0.05*dy,title,ha='left',va='top',backgroundcolor=(1.,1.,1., 0.5))
+                ax.text(x[-1]-0.05*dx,y[-1]-0.05*dy,title,ha='left',va='top',backgroundcolor=(1.,1.,1., 0.5))
             else:
-                ax.text(np.min(points[:,0])+0.05*dx,np.max(points[:,1])-0.05*dy,title,ha='left',va='top',backgroundcolor=(1.,1.,1., 0.5))
+                ax.text(x[0]+0.05*dx,y[-1]-0.05*dy,title,ha='left',va='top',backgroundcolor=(1.,1.,1., 0.5))
         return ax, img
 
-
-    def plot(self, ant_sel=None,time_sel=None,freq_sel=None,dir_sel=None,pol_sel=None, fignames=None, vmin=None,vmax=None,mode='perantenna',observable='phase',phase_wrap=True, log_scale=False, plot_crosses=True,plot_facet_idx=False,plot_patchnames=False,labels_in_radec=False,show=False, plot_arrays=False, **kwargs):
+    def plot(self, ant_sel=None,time_sel=None,freq_sel=None,dir_sel=None,pol_sel=None, fignames=None, vmin=None,vmax=None,mode='perantenna',observable='phase',phase_wrap=True, log_scale=False, plot_crosses=True,plot_facet_idx=False,plot_patchnames=False,labels_in_radec=False,show=False, plot_arrays=False, solset=None, plot_screen=False, **kwargs):
         """
         Plot datapack with given parameters.
         """
@@ -151,6 +150,8 @@ class DatapackPlotter(object):
         # Set up plotting
 
         with self.datapack:
+            self.datapack.switch_solset(solset)
+            logging.info("Applying selection: ant={},time={},freq={},dir={},pol={}".format(ant_sel,time_sel,freq_sel,dir_sel,pol_sel))
             self.datapack.select(ant=ant_sel,time=time_sel,freq=freq_sel,dir=dir_sel,pol=pol_sel)
             obs,axes = self.datapack.__getattr__(observable)
             if observable.startswith('weights_'):
@@ -164,7 +165,15 @@ class DatapackPlotter(object):
             antenna_labels, antennas = self.datapack.get_antennas(axes['ant'])
             patch_names, directions = self.datapack.get_sources(axes['dir'])
             timestamps, times = self.datapack.get_times(axes['time'])
-            freq_labels, freqs = self.datapack.get_freqs(axes['freq'])
+            freq_dep = True
+            try:
+                freq_labels, freqs = self.datapack.get_freqs(axes['freq'])
+            except:
+                freq_dep = False
+                obs = obs[:,:,None,:]
+                freq_labels, freqs = [""],[None]
+
+            
 
         
             if phase_wrap:
@@ -184,6 +193,9 @@ class DatapackPlotter(object):
             Nd = len(directions)
             Nf = len(freqs)
             fixfreq = Nf >> 1
+            logging.info("Plotting {} directions".format(Nd))
+            logging.info("Plotting {} antennas".format(Na))
+            logging.info("Plotting {} timestamps".format(Nt))
             
             _, antennas_ = self.datapack.get_antennas([self.datapack.ref_ant])        
             #ants_uvw = antennas.transform_to(uvw)
@@ -192,25 +204,38 @@ class DatapackPlotter(object):
 #            if labels_in_radec:
             ra = directions.ra.deg
             dec = directions.dec.deg
-            points = np.array([ra,dec]).T
-
-#            else:
-#                fixtime = times[0]
-#                phase_center = self.datapack.pointing_center
-#                array_center = self.datapack.array_center
-#                uvw = UVW(location = array_center.earth_location,obstime = fixtime,phase = phase_center)
-#                dirs_uvw = directions.transform_to(uvw)
-#                u_rad = np.arctan2(dirs_uvw.u.value,dirs_uvw.w.value)
-#                v_rad = np.arctan2(dirs_uvw.v.value,dirs_uvw.w.value)
-#                points = np.array([u_rad,v_rad]).T
+            if not plot_screen:
+                ### points are normal
+                points = np.array([ra,dec]).T
+                if plot_crosses:
+                    overlay_points = points
+                else:
+                    overlay_points = None
+            else:
+                ### get unique ra and dec and then rearrange into correct order.
+                _ra = np.unique(ra)
+                _dec = np.unique(dec)
+                Nra = len(_ra)
+                Ndec = len(_dec)
+                assert Ndec * Nra == Nd
+                ### sort lexiconially
+                ind = np.lexsort((ra,dec))
+                points = (_ra, _dec)
+                obs = obs[ind, ...]
+                obs = obs.reshape((Ndec,Nra,Na,Nf,Nt))
+                if plot_crosses:
+                    overlay_points = None # put the facet (ra,dec).T
+                else:
+                    overlay_points = None
+                
 
         if fignames is not None:
             if not isinstance(fignames,(tuple,list)):
                 fignames = [fignames]
         if fignames is not None:
             assert Nt == len(fignames)
-        print(timestamps, times,axes)
 
+        
 
         if mode == 'perantenna':
             
@@ -235,10 +260,16 @@ class DatapackPlotter(object):
                         title = antenna_labels[c].decode()
                     except:
                         title = antenna_labels[c]
-                    _, p = self._create_polygon_plot(points, values=None, N = None,
-                            ax=ax,cmap=cmap,overlay_points=plot_crosses,
-                            title="{} {:.1f}km".format(title, ref_dist[c]),
-                            reverse_x=labels_in_radec)
+                    if plot_screen:
+                        _, p = self._create_image_plot(points, values=None, N = None,
+                                ax=ax,cmap=cmap,overlay_points=overlay_points,
+                                title="{} {:.1f}km".format(title, ref_dist[c]),
+                                reverse_x=labels_in_radec)
+                    else:
+                        _, p = self._create_polygon_plot(points, values=None, N = None,
+                                ax=ax,cmap=cmap,overlay_points=overlap_points,
+                                title="{} {:.1f}km".format(title, ref_dist[c]),
+                                reverse_x=labels_in_radec)
                     p.set_clim(vmin,vmax)
                     axes_patches.append(p)
                     c += 1
@@ -252,7 +283,10 @@ class DatapackPlotter(object):
             for j in range(Nt):
                 logging.info("Plotting {}".format(timestamps[j]))
                 for i in range(Na):
-                    axes_patches[i].set_array(obs[:,i,fixfreq,j])
+                    if not plot_screen:
+                        axes_patches[i].set_array(obs[:,i,fixfreq,j])
+                    else:
+                        axes_patches[i].set_array(obs[:,:,i,fixfreq,j])
                 axs[0,0].set_title("{} {} : {}".format(observable, freq_labels[fixfreq], timestamps[j]))
                 fig.canvas.draw()
                 if save_fig:
@@ -311,7 +345,36 @@ def make_animation(datafolder,prefix='fig',fps=4):
     if os.system('ffmpeg -framerate {} -i {}/{}-%04d.png -vf scale="trunc(iw/2)*2:trunc(ih/2)*2" -c:v libx264 -profile:v high -pix_fmt yuv420p -g 30 -r 30 {}/animation.mp4'.format(fps,datafolder,prefix,datafolder)):
         logging.info("{}/animation.mp4 exists already".format(datafolder))    
 
+def plot_phase_vs_time(datapack,output_folder,
+                       ant_sel=None,time_sel=None,dir_sel=None,freq_sel=None,pol_sel=None):
 
+    output_folder = os.path.abspath(output_folder)
+    os.makedirs(output_folder,exist_ok=True)
+
+    with DataPack(datapack,readonly=True) as datapack:
+        datapack.select(ant=ant_sel,time=time_sel,dir=dir_sel,freq=freq_sel,pol=pol_sel)
+        weights,axes = datapack.weights_phase
+        freq_ind = len(axes['freq']) >> 1
+        freq = axes['freq'][freq_ind]
+        ant = axes['ant'][0]
+        phase,_ = datapack.phase
+        std = 1./np.sqrt(weights)
+        timestamps,times = datapack.get_times(axes['time'])
+        Npol,Nd,Na,Nf,Nt = phase.shape
+        fig,ax = plt.subplots()
+        for p in range(Npol):
+            for d in range(Nd):
+                for a in range(Na):
+                    for f in range(Nf):
+                        ax.cla()
+                        label = "{} {:.1f}MHz {}:{}".format(axes['pol'][p], axes['freq'][f]/1e6, axes['ant'][a], axes['dir'][d])
+                        ax.fill_between(times.mjd,phase[p,d,a,f,:]-2*std[p,d,a,f,:],phase[p,d,a,f,:]+2*std[p,d,a,f,:],alpha=0.5,label=r'$\pm2\hat{\sigma}_\phi$')#,color='blue')
+                        ax.scatter(times.mjd,phase[p,d,a,f,:],marker='+',alpha=0.3,color='black',label=label)
+                        ax.legend()
+                        ax.set_xlabel('Time [mjd]')
+                        ax.set_ylabel('Phase deviation [rad.]')
+                        filename = "{}_{}_{}_{}MHz.png".format(axes['ant'][a], axes['dir'][d], axes['pol'][p], axes['freq'][f]/1e6 )
+                        plt.savefig(os.path.join(output_folder,filename))
 
 def test_vornoi():
     from scipy.spatial import Voronoi, voronoi_plot_2d
