@@ -65,23 +65,42 @@ def altaz_to_enu(altaz_coo, enu_frame):
     '''Defines the transformation between AltAz and the ENU frame.
     AltAz usually has units attached but ENU does not require units 
     if it specifies a direction.'''
-    location_altaz = ITRS(*enu_frame.location.to_geocentric()).transform_to(AltAz(location=enu_frame.location, obstime=enu_frame.obstime))
+    is_directional = (isinstance(altaz_coo.data, UnitSphericalRepresentation) or
+                        altaz_coo.cartesian.x.unit == u.one)
 
-    rep = CartesianRepresentation(x = altaz_coo.cartesian.y - location_altaz.cartesian.y,
-                y = altaz_coo.cartesian.x - location_altaz.cartesian.x,
-                z = altaz_coo.cartesian.z - location_altaz.cartesian.z,
-                copy=False)
+
+    if is_directional:
+        rep = CartesianRepresentation(x = altaz_coo.cartesian.y,
+                    y = altaz_coo.cartesian.x,
+                    z = altaz_coo.cartesian.z,
+                    copy=False)
+    else:
+        location_altaz = ITRS(*enu_frame.location.to_geocentric()).transform_to(AltAz(location=enu_frame.location, obstime=enu_frame.obstime))
+        rep = CartesianRepresentation(x = altaz_coo.cartesian.y - location_altaz.cartesian.y,
+                    y = altaz_coo.cartesian.x - location_altaz.cartesian.x,
+                    z = altaz_coo.cartesian.z - location_altaz.cartesian.z,
+                    copy=False)
     return enu_frame.realize_frame(rep)
 
 
 @frame_transform_graph.transform(FunctionTransform, ENU, AltAz)
 def enu_to_altaz(enu_coo, altaz_frame):
-    location_altaz = ITRS(*enu_coo.location.to_geocentric()).transform_to(AltAz(location=enu_coo.location, obstime=enu_coo.obstime))
 
-    rep = CartesianRepresentation(x = enu_coo.north + location_altaz.cartesian.x,
-                y = enu_coo.east + location_altaz.cartesian.y,
-                z = enu_coo.up + location_altaz.cartesian.z,
-                copy=False)
+    is_directional = (isinstance(enu_coo.data, UnitSphericalRepresentation) or
+                        enu_coo.cartesian.x.unit == u.one)
+
+    if is_directional:
+        rep = CartesianRepresentation(x = enu_coo.north,
+                    y = enu_coo.east,
+                    z = enu_coo.up,
+                    copy=False)
+    else:
+        location_altaz = ITRS(*enu_coo.location.to_geocentric()).transform_to(AltAz(location=enu_coo.location, obstime=enu_coo.obstime))
+        rep = CartesianRepresentation(x = enu_coo.north + location_altaz.cartesian.x,
+                    y = enu_coo.east + location_altaz.cartesian.y,
+                    z = enu_coo.up + location_altaz.cartesian.z,
+                    copy=False)
+
     return itrs_frame.realize_frame(rep)
     
 @frame_transform_graph.transform(FunctionTransform, ENU, ENU)
