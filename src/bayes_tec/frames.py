@@ -52,7 +52,7 @@ class ENU(BaseCoordinateFrame):
 
     def __init__(self, *args, **kwargs):
         super(ENU, self).__init__(*args, **kwargs)
-
+    
     @property
     def elevation(self):
         """
@@ -65,18 +65,22 @@ def altaz_to_enu(altaz_coo, enu_frame):
     '''Defines the transformation between AltAz and the ENU frame.
     AltAz usually has units attached but ENU does not require units 
     if it specifies a direction.'''
-    rep = CartesianRepresentation(x = altaz_coo.cartesian.y,
-                y = altaz_coo.cartesian.x,
-                z = altaz_coo.cartesian.z,
+    location_altaz = ITRS(*enu_frame.location.to_geocentric()).transform_to(AltAz(location=enu_frame.location, obstime=enu_frame.obstime))
+
+    rep = CartesianRepresentation(x = altaz_coo.cartesian.y - location_altaz.cartesian.y,
+                y = altaz_coo.cartesian.x - location_altaz.cartesian.x,
+                z = altaz_coo.cartesian.z - location_altaz.cartesian.z,
                 copy=False)
     return enu_frame.realize_frame(rep)
 
 
 @frame_transform_graph.transform(FunctionTransform, ENU, AltAz)
-def enu_to_itrs(enu_coo, altaz_frame):
-    rep = CartesianRepresentation(x = enu_coo.north,
-                y = enu_coo.east,
-                z = enu_coo.up,
+def enu_to_altaz(enu_coo, altaz_frame):
+    location_altaz = ITRS(*enu_coo.location.to_geocentric()).transform_to(AltAz(location=enu_coo.location, obstime=enu_coo.obstime))
+
+    rep = CartesianRepresentation(x = enu_coo.north + location_altaz.cartesian.x,
+                y = enu_coo.east + location_altaz.cartesian.y,
+                z = enu_coo.up + location_altaz.cartesian.z,
                 copy=False)
     return itrs_frame.realize_frame(rep)
     
@@ -84,7 +88,7 @@ def enu_to_itrs(enu_coo, altaz_frame):
 def enu_to_enu(from_coo, to_frame):
     # for now we just implement this through AltAz to make sure we get everything
     # covered
-    return from_coo.transform_to(AltAz(obstime=from_coo.obstime)).transform_to(to_frame)
+    return from_coo.transform_to(AltAz(location=from_coo.location, obstime=from_coo.obstime)).transform_to(to_frame)
 
 
 class Pointing(BaseCoordinateFrame):
@@ -140,6 +144,8 @@ class Pointing(BaseCoordinateFrame):
 
     def __init__(self, *args, **kwargs):
         super(Pointing, self).__init__(*args, **kwargs)
+
+
     @property
     def elevation(self):
         """
