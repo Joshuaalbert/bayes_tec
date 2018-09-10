@@ -6,7 +6,7 @@ from concurrent import futures
 def wrap(x):
     return np.arctan2(np.sin(x),np.cos(x))
 
-def make_coord_array(*X):
+def make_coord_array(*X,flat=True):
     """
     Return the design matrix from coordinates.
     """
@@ -28,7 +28,8 @@ def make_coord_array(*X):
         for dim in range(x.shape[1]):
             X_.append(add_dims(x[:,dim],[i], N))
     X = np.stack(X_,axis=-1)
-    
+    if not flat:
+        return X 
     return np.reshape(X,(-1,X.shape[-1]))
 
 def _parallel_shift(arg):
@@ -58,8 +59,8 @@ def calculate_weights(Y,indep_axis=-1, N=200,phase_wrap=True, min_uncert=1e-3, n
             jobs = executor.map(_parallel_shift,args)
             results = list(jobs)# each is N, Nt but rolled
         for r in results[1:]:
-            results[0] += r
-        results[0] /= N
+            results[0] = results[0] + r
+        results[0] = results[0]/N
         z_mean = results[0]
         R2 = z_mean * z_mean.conj()
         Re2 = N/(N-1)*(R2 - 1./N)
@@ -164,7 +165,7 @@ def define_equal_subsets(N,max_block_size, min_overlap,verbose=False):
         verb = "\n".join(["  {:3d}|{:3d}|{:3d}".format(*r) if not np.all(r == res) else ">>{:3d}|{:3d}|{:3d}".format(*r) for r in possible])
         logging.warning("Available configurations:\n  ( n|  B| overlap )\n{}".format(verb))
 
-    blocks, val_blocks = [],[]
+    blocks, val_blocks, inv_map = [],[],[]
     start=0
     i = 0
     n,B,O = res
@@ -172,39 +173,15 @@ def define_equal_subsets(N,max_block_size, min_overlap,verbose=False):
         blocks.append((i*B - i*2*O, (i+1)*B - i*2*O))
         if i == 0:
             val_blocks.append((blocks[-1][0], blocks[-1][1]-O))
+            inv_map.append((0,B-O))
         elif i == n:
             val_blocks.append((blocks[-1][0] + O, blocks[-1][1]))
+            inv_map.append((O,B-O))
         else:
             val_blocks.append((blocks[-1][0] + O, blocks[-1][1] - O))
+            inv_map.append((O,B))
         i += 1
-    return blocks, val_blocks
-
-def define_equal_subsets(X_t, overlap, max_block_size):
-    """
-    Define the subsets of X_t with minimum overlap size blocks, 
-    as a set of edges.
-    X_t :array (N,1)
-        times
-    overlap : float
-    max_block_size : int
-        The max number of points per block
-    Returns:
-    list of int, The edges
-    """
-    assert overlap < X_t[-1,0] - X_t[0,0]
-    dt = X_t[1,0] - X_t[0,0]
-    max_block_size = int(max_block_size)
-    
-    M = int(np.ceil(X_t.shape[0]/max_block_size))
-
-    edges = np.linspace(X_t[0,0],X_t[-1,0],M+1)
-    
-    edges_idx = np.searchsorted(X_t[:,0],edges)
-    starts = edges_idx[:-1]
-    stops = edges_idx[1:]
-    for s1,s2 in zip(starts,stops):
-        assert X_t[s2,0] - X_t[s1,0] >= 3*overlap, "Overlap ({}) -> {} and max_block_size ({}) incompatible".format(overlap,overlap/dt,max_block_size)
-    return starts,stops
+    return blocks, val_blocks, inv_map
 
 
 def define_subsets(X_t, overlap, max_block_size):

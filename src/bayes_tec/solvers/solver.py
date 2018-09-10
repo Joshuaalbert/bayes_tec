@@ -1,27 +1,45 @@
 from ..datapack import DataPack
-from ..utils.data_utils import calculate_weights, make_data_vec, make_coord_array, define_subsets
-from ..utils.stat_utils import log_normal_solve
-from ..utils.gpflow_utils import train_with_adam, SendSummary, SaveModel
-from ..likelihoods import WrappedPhaseGaussian
-from ..frames import ENU
-from ..models.homoscedastic_phaseonly_svgp import HomoscedasticPhaseOnlySVGP
 from ..logging import logging
-import astropy.units as au
-from scipy.cluster.vq import kmeans2
-import numpy as np
 import os
 import glob
-from gpflow import settings
-from gpflow.priors import LogNormal, Gaussian
-from gpflow.mean_functions import Constant
-from gpflow.kernels import Matern52, White
-from gpflow.features import InducingPoints
-#from gpflow.training.monitor import (create_global_step, PrintTimingsTask, PeriodicIterationCondition, 
-#        CheckpointTask, LogdirWriter, ModelToTensorBoardTask, Monitor)
-from gpflow import defer_build
-import gpflow.multioutput.kernels as mk
-import gpflow.multioutput.features as mf
 import tensorflow as tf
+from gpflow import settings
+import astropy.units as au
+import astropy.coordinates as ac
+import astropy.time as at
+import numpy as np
+from ..frames import ENU
+from ..utils.data_utils import make_coord_array
+from timeit import default_timer
+from concurrent import futures
+
+def _parallel_coord_transform(array_center,time, time0, directions, screen_directions, antennas):
+    enu = ENU(location=array_center, obstime=time)
+    enu_dirs = directions.transform_to(enu)
+    enu_ants = antennas.transform_to(enu)
+    east = enu_ants.east.to(au.km).value
+    north = enu_ants.north.to(au.km).value
+    up = enu_ants.up.to(au.km).value
+    kz = enu_dirs.up.value
+    ra = directions.ra.rad
+    dec = directions.dec.rad
+    X = make_coord_array(
+            np.stack([kz,ra,dec],axis=-1),
+            np.stack([east,north,up],axis=-1), 
+            np.array([[time.mjd*86400. - time0]]),flat=False)
+    
+    enu_dirs = screen_directions.transform_to(enu)
+    kz = enu_dirs.up.value
+    ra = screen_directions.ra.rad
+    dec = screen_directions.dec.rad
+    X_screen = make_coord_array(
+            np.stack([kz,ra,dec],axis=-1),
+            np.stack([east,north,up],axis=-1), 
+            np.array([[time.mjd*86400. - time0]]),flat=False)
+
+    return X, X_screen
+
+
 
 class Solver(object):
     def __init__(self,run_dir, datapack):
@@ -36,11 +54,167 @@ class Solver(object):
         if isinstance(datapack,str):
             datapack = DataPack(datapack)
         self.datapack = datapack
-    def run(self,*args, **kwargs):
+
+    def solve(self, **kwargs):
         """Run the solver"""
+        data_shape, build_params = self._prepare_data(self.datapack, **kwargs)
+        
+        graph = tf.Graph()
+        sess = self._new_session(graph, **kwargs)
+
+        summary_id = len(glob.glob(os.path.join(self.summary_dir,"summary_*")))
+        summary_folder = os.path.join(self.summary_dir,"summary_{:03d}".format(summary_id))
+        os.makedirs(summary_folder,exist_ok=True)
+        with graph.as_default(), sess.as_default(), \
+                tf.summary.FileWriter(summary_folder, graph) as writer:
+            _, (X, Y, weights) = self._train_dataset_iterator(data_shape, sess=sess, **kwargs)
+            model = self._build_model(X, Y, weights=weights, **build_params, **kwargs)
+            # train model
+            save_id = len(glob.glob(os.path.join(self.save_dir,"save_*")))
+            save_folder = os.path.join(self.save_dir,"save_{:03d}".format(save_id))
+            os.makedirs(save_folder,exist_ok=True)
+            saved_model = self._train_model(model, save_folder, writer, **kwargs)
+            
+            # TODO break prediction into another call (i.e. not in solve)
+            self._load_model(model, saved_model)
+            
+            ystar, varstar = [], []
+            for X in self._posterior_coords(self.datapack, screen=False, **kwargs):
+                _ystar, _varstar = self._predict_posterior(model, X)
+                ystar.append(_ystar)
+                varstar.append(_varstar)
+            ystar = np.concatenate(ystar, axis=0)
+            varstar = np.concatenate(varstar, axis=0)
+            self._save_posterior(ystar, varstar, self.datapack, data_shape, screen=False, **kwargs)
+
+            ystar, varstar = [], []
+            for X in self._posterior_coords(self.datapack, screen=True, **kwargs):
+                _ystar, _varstar = self._predict_posterior(model, X)
+                ystar.append(_ystar)
+                varstar.append(_varstar)
+            ystar = np.concatenate(ystar, axis=0)
+            varstar = np.concatenate(varstar, axis=0)
+            self._save_posterior(ystar, varstar, self.datapack, data_shape, screen=True, **kwargs)
+
+    def _maybe_fill_coords(self, solset, soltab, datapack, screen_res=30, num_threads = None, recalculate_coords=False, **kwargs):
+        ### TODO this should be not in Solver but specific to the type of solver.
+        # here so that block solver runs simply for now, will need to rearrange
+        # probably will be easiest to have a datapack_prep class that either call
+        with datapack:
+            logging.info("Calculating coordinates")
+            if recalculate_coords:
+                datapack.delete_solset("X_facets")
+                datapack.delete_solset("X_screen")
+
+            if not datapack.is_solset('X_facets') or not datapack.is_solset("X_screen"):
+                datapack.switch_solset(solset)
+                datapack.select(ant=None,time=None, dir=None, freq=None, pol=None)
+                axes = datapack.__getattr__("axes_{}".format(soltab))
+                
+                antenna_labels, antennas = datapack.get_antennas(axes['ant'])
+                patch_names, directions = datapack.get_sources(axes['dir'])
+                timestamps, times = datapack.get_times(axes['time'])
+                freq_labels, freqs = datapack.get_freqs(axes['freq'])
+                pol_labels, pols = datapack.get_pols(axes['pol'])
+
+                Npol, Nd, Na, Nf, Nt = len(pols), len(directions), len(antennas), len(freqs), len(times)
+                
+                screen_ra = np.linspace(np.min(directions.ra.rad) - 0.25*np.pi/180., 
+                        np.max(directions.ra.rad) + 0.25*np.pi/180., screen_res)
+                screen_dec = np.linspace(max(-90.*np.pi/180.,np.min(directions.dec.rad) - 0.25*np.pi/180.), 
+                        min(90.*np.pi/180.,np.max(directions.dec.rad) + 0.25*np.pi/180.), screen_res)
+                screen_directions = np.stack([m.flatten() \
+                        for m in np.meshgrid(screen_ra, screen_dec, indexing='ij')], axis=1)
+                screen_directions = ac.SkyCoord(screen_directions[:,0]*au.rad,screen_directions[:,1]*au.rad,frame='icrs')
+                Nd_screen = screen_res**2
+
+                ###
+                # fill them out
+                X = np.zeros((Nd,Na,Nt,7),dtype=np.float32)
+                X_screen = np.zeros((Nd_screen,Na,Nt,7),dtype=np.float32)
+                t0 = default_timer()
+                for j,time in enumerate(times):
+                    X[:,:,j:j+1,:],X_screen[:,:,j:j+1,:] = _parallel_coord_transform(datapack.array_center, time, times[0].mjd*86400., directions, screen_directions, antennas)
+                    if (j+1) % (Nt//20) == 0:
+                        time_left = (Nt - j - 1) * (default_timer() - t0)/ (j + 1)
+                        logging.info("{:.2f}% done... {:.2f} seconds left".format(100*(j+1)/Nt, time_left))
+
+                
+                self.datapack.switch_solset("X_facets", 
+                        array_file=DataPack.lofar_array, 
+                        directions = np.stack([directions.ra.rad,directions.dec.rad],axis=1))
+                self.datapack.add_freq_indep_tab('coords', times.mjd*86400., pols = ('kz','ra','dec','east','north','up','time'))
+                self.datapack.coords = X.transpose((3,0,1,2))
+
+                
+                self.datapack.switch_solset("X_screen", 
+                        array_file=DataPack.lofar_array, 
+                        directions = np.stack([screen_directions.ra.rad,screen_directions.dec.rad],axis=1))
+                self.datapack.add_freq_indep_tab('coords', times.mjd*86400., pols = ('kz','ra','dec','east','north','up','time'))
+                self.datapack.coords = X_screen.transpose((3,0,1,2))        
+
+                self.datapack.switch_solset("screen_sol", 
+                        array_file = DataPack.lofar_array, 
+                        directions = np.stack([screen_directions.ra.rad,screen_directions.dec.rad],axis=1))
+                self.datapack.add_freq_indep_tab('tec', times.mjd*86400., pols = pol_labels)
+                
+                self.datapack.switch_solset("posterior_sol", 
+                        array_file=DataPack.lofar_array, 
+                        directions = np.stack([directions.ra.rad,directions.dec.rad],axis=1))
+                self.datapack.add_freq_indep_tab('tec', times.mjd*86400., pols = pol_labels)
+
+                datapack.switch_solset(solset)
+
+    def _posterior_coords(self, datapack, screen=False, **kwargs):
+        """
+        generator that yeilds batchs of X coords to do posterior prediction at.
+        screen: bool if True return screen coords
+        """
         raise NotImplementedError("Must subclass")
 
-    def _new_session(self, graph, intra_op_threads, inter_op_threads):
+    def _save_posterior(self, ystar, varstar, datapack, data_shape, screen=False, **kwargs):
+        """
+        Save the results in the datapack in the appropriate slots
+        screen: bool if True save in the screen slot
+        """
+        raise NotImplementedError("Must subclass")
+
+    def _predict_posterior(self, X, **kwargs):
+        """
+        Predict the model at the coords.
+        X: array of [batch, ndim]
+        returns:
+        ystar [batch, P] predictive mean at coords
+        varstar [batch, P] predictive variance at the coords
+        """
+        raise NotImplementedError("Must subclass")
+
+    def _train_model(self, model, save_folder, **kwargs):
+        """
+        Train the model.
+        Returns the saved model.
+        """
+        raise NotImplementedError("Must subclass")
+
+    def _load_model(self, model):
+        """
+        Load a model given by model path
+        """
+        raise NotImplementedError("Must subclass")
+
+
+    def _build_model(self, X, Y, weights=None, **kwargs):
+        """
+        Build the model from the data.
+        X,Y: tensors the X and Y of data
+        weights: statistical weights that may be None
+
+        Returns:
+        gpflow.models.Model
+        """
+        raise NotImplementedError("Must subclass")
+
+    def _new_session(self, graph, intra_op_threads=0, inter_op_threads=0, **kwargs):
         os.environ["KMP_BLOCKTIME"] = "1"
         os.environ["KMP_SETTINGS"] = "1"
         os.environ["KMP_AFFINITY"] = "granularity=fine,verbose,compact,1,0"
@@ -52,289 +226,54 @@ class Solver(object):
         sess = tf.Session(graph=graph,config=config)
         return sess
 
-
-class OverlapPhaseOnlySolver(Solver):
-    def __init__(self,  run_dir, datapack):
-        super(OverlapPhaseOnlySolver,self).__init__(run_dir,datapack)
-#        if not isinstance(tabs,(tuple,list)):
-#            tabs = [tabs]
-#        self.tabs = tabs # ['phase', 'amplitude', ...] etc.
-        self.tabs = ['phase']
-
-    def _make_part_model(self, X, Y, Z, minibatch_size=None, eval_freq=140e6, 
-            tec_scale=0.01, num_latent=1, priors=None, shared_kernels=True, shared_features=True):
+    def _prepare_data(self,datapack,**kwargs):
         """
-        Create a gpflow model for a selection of data
-        X: array (N, Din)
-        Y: array (N, 2*Dout + 1)
-            See ..utils.data_utils.make_datavec
-        minibatch_size : int 
-        Z: array (M, Din)
-            The inducing points if desired to set.
-        eval_freq: float the freq in Hz where evaluation occurs.
+        Prepares the data in the datapack for solving.
+        Likely steps:
+        1. Determine measurement variance
+        2. Calculate data coordinates (new sol-tab is made inside the solset)
+        3. Make new hdf5 file linking to X,Y weights
+        datapack : DataPack solutions to solve
+        Returns:
+        data_shape
         """
-        N, Dout = Y.shape
-        _, Din = X.shape
+        raise NotImplementedError("Must subclass")
 
-        assert priors is not None
-        likelihood_var = priors['likelihood_var']
-        tec_kern_time_ls = priors['tec_kern_time_ls']
-        tec_kern_dir_ls = priors['tec_kern_dir_ls']
-        tec_kern_var = priors['tec_kern_var']
-        tec_mean = priors['tec_mean']
+    def _get_data(self,indices,data_shape, dtype=settings.np_float):
+        """
+        Return a selection of (X,Y,weights/var)
+        indices : array of indices that index into data 
+        data_shape : tuple of dim sizes for index raveling
 
-        with defer_build():
+        Returns:
+        X array tf.float64 [ndims]
+        Y array tf.float64 [P]
+        weights array tf.float64 [P]
+        """
+        raise NotImplementedError("Must subclass")
 
-            
-            # Define the likelihood
-            likelihood = WrappedPhaseGaussian(tec_scale=tec_scale,freq=eval_freq)
-            likelihood.variance = np.exp(likelihood_var[0]) #median as initial
-            likelihood.variance.prior = LogNormal(likelihood_var[0],likelihood_var[1]**2)
-            likelihood.variance.set_trainable(True)
-            def _kern():
-                kern_time = Matern32(1,active_dims=[2])
-                kern_time.lengthscales = np.exp(tec_kern_time_ls[0])
-                kern_time.lengthscales.set_trainable(True)
-                kern_time.lengthscales.prior = LogNormal(tec_kern_time_ls[0],tec_kern_time_ls[1]**2)#gamma_prior(70./t_std, 50./t_std)
-                kern_time.variance = np.exp(tec_kern_var[0])
-                kern_time.variance.set_trainable(True)
-                kern_time.variance.prior = LogNormal(tec_kern_var[0],tec_kern_var[1]**2)#gamma_prior(0.001, 0.005)
+    def _train_dataset_iterator(self, data_shape,  sess=None, minibatch_size=128,seed=0, **kwargs):
+        """
+        Create a dataset iterator.
+        Produce synchronized minibatches, and initializes if given a session.
+        Will use _get_data asynchronously to pull data as needed.
+        data_shape: tuple of size of data axes e.g. (Nd, Na, Nt)
+        Returns:
+        TF op to init dataset iterator
+        tuple of synchrionized next data tensors (X, Y, weights)
+        """
 
-                kern_space = Matern52(2,active_dims=[0,1],variance=1.)
-                kern_space.variance.set_trainable(False)
-                kern_space.lengthscales = np.exp(tec_kern_dir_ls[0])
-                kern_space.lengthscales.set_trainable(True)
-                kern_space.lengthscales.prior = LogNormal(tec_kern_dir_ls[0],tec_kern_dir_ls[1]**2)
+        def _random_coords(n):
+            return tf.stack([tf.random_uniform((minibatch_size,),0,s,dtype=tf.int64) for s in data_shape],axis=1)
 
-                white = White(3)
-                white.variance = 0.0005**2/tec_scale**2
-                white.variance.set_trainable(False)
-                kern = kern_time*kern_space + white
-                return kern
+        minibatches = tf.constant([1])
+        data = tf.data.Dataset.from_tensor_slices([minibatches])
+        data = data.repeat()#repeat and batch forever
+        data = data.map(_random_coords)#indices compatible with data_shape
+        data = data.map(lambda indices: \
+                tuple(tf.py_func(lambda indices: self._get_data(indices,data_shape),[indices], [settings.float_type]*3)))#X, Y, W
 
-            if not shared_kernels:
-                kern_list = [_kern() for _ in range(num_latent)]
-                kern = mk.SeparateIndependentMok(kern_list)
-            else:
-                kern = mk.SharedIndependentMok(_kern(),num_latent)
-
-            if not shared_features:
-                feature_list = [InducingPoints(Z) for _ in range(num_latent)]
-                feature = mf.SeparateIndependentMof(feature_list)
-            else:
-                feature = mf.SharedIndependentMof(InducingPoints(Z))
-
-
-
-            mean = Constant(0.)#tec_mean_mu)
-            mean.c.set_trainable(False)
-            mean.c.prior = Gaussian(tec_mean[0],tec_mean[1])
-
-            model = HomoscedasticPhaseOnlySVGP(X, Y, kern, likelihood, 
-                        feat = feature,
-                        mean_function=mean, 
-                        minibatch_size=minibatch_size,
-                        num_latent = num_latent, 
-                        num_data=N,
-                        whiten=False)
-
-            model.compile()
-        return model
-
-
-    def run(self, ant_sel=None, time_sel=None, dir_sel=None, freq_sel=None, pol_sel=None,reweight_obs=True, 
-            screen_res=30, jitter=1e-6, learning_rate=1e-3, iterations=10000, minibatch_size=128, 
-            eval_freq=140e6, dof_ratio=35., max_block_size=800, overlap = 180., tec_scale = 0.01, time_skip=3, 
-            intra_op_threads=0, inter_op_threads=0, shared_kernels=True, shared_features=True, **kwargs):
-
-        settings.numerics.jitter = jitter
-
-        with self.datapack:
-            self.datapack.select(ant=ant_sel,time=time_sel, dir=dir_sel, freq=freq_sel, pol=pol_sel)
-            Y = []
-            weights = []
-            axes = None
-            # general for more tabs if desired (though model must change)
-            for tab in self.tabs:
-                vals, axes = self.datapack.__getattr__(tab)
-                # each Npols, Nd, Na, Nf, Nt
-                Y.append(vals)
-                if reweight_obs:
-                    logging.info("Re-calculating weights...")
-                    smooth_len = int(2 * self.overlap / (axes['time'][1] - axes['time'][0]))
-                    weights_ = calculate_weights(vals,indep_axis = -1, num_threads = None, N=smooth_len, phase_wrap=True, min_uncert=1e-3)
-                    self.datapack.__setattr__("weights_{}".format(tab), weights_)
-                    weights.append(weights_)
-                else:
-                    weights_, _ = self.datapack.__getattr__("weights_{}".format(tab))
-                    weights.append(weights_)
-
-            antenna_labels, antennas = self.datapack.get_antennas(axes['ant'])
-            patch_names, directions = self.datapack.get_sources(axes['dir'])
-            timestamps, times = self.datapack.get_times(axes['time'])
-            freq_labels, freqs = self.datapack.get_freqs(axes['freq'])
-            pol_labels, pols = self.datapack.get_pols(axes['pol'])
-            
-            # Npols, Nd, Na, Nf, Nt, Ntabs
-            Y = np.stack(Y,axis=-1)
-            weights = np.stack(weights,axis=-1)
-            uncert_mean = np.mean(1./np.sqrt(weights))
-            weights /= np.mean(weights)
-            Npol, Nd, Na, Nf, Nt, Ntabs = Y.shape
-            # Nd, Npol*Na*Ntabs, Nf, Nt
-            Y = Y.transpose((1,0,2,5, 3,4)).reshape((Nd, Npol*Na*Ntabs, Nf, Nt))
-            weights = weights.transpose((1,0,2,5, 3,4)).reshape((Nd, Npol*Na*Ntabs, Nf, Nt))
-            #Nd, Nt, Nf, Npol*Na*Ntabs
-            Y = Y.transpose((0,3,2,1))
-            weights = weights.transpose((0,3,2,1))
-            num_latents = Npol*Na*Ntabs
-            # Nd, Nt, Nf,2 * Npol*Na*Ntabs + 1
-            data_vec = make_data_vec(Y, freqs,weights=weights)
-            num_latent = Npol*Na*Ntabs
-            
-            ###
-            # input coords
-
-            X_d = np.array([directions.ra.deg,directions.dec.deg]).T
-            X_t = times.mjd[:,None]*86400.#mjs
-            enu = ENU(obstime=times[0],location=self.datapack.array_center)
-            ant_enu = antennas.transform_to(enu)
-            X_a = np.array([ant_enu.east.to(au.km).value, ant_enu.north.to(au.km).value]).T
-
-            d_std = X_d.std(0).mean() + 1e-6
-            t_std = X_t.std() + 1e-6
-            a_std = X_a.std(0).mean() + 1e-6
-
-            X_a = (X_a - X_a.mean(0)) / a_std
-            X_t = (X_t - X_t.mean()) / t_std
-            d_mean = X_d.mean(0)
-            X_d = (X_d - d_mean) / d_std
-
-            d_min, d_max = np.min(X_d), np.max(X_d)
-            X_d_ = np.array([m.flatten() \
-                    for m in np.meshgrid(*([np.linspace(d_min,d_max, screen_res)]*2),indexing='ij')]).T
-            Nd_ = screen_res**2
-            directions_ = X_d_*d_std + d_mean
-            self.datapack.switch_solset("screen_sol", 
-                    array_file = DataPack.lofar_array, 
-                    directions = directions_ * np.pi/180.)
-            # store variance in tec/weights
-            self.datapack.add_freq_indep_tab('tec', times.mjd*86400., pols = pol_labels)
-            screen_dtec, _ = self.datapack.tec
-            screen_dtec_var = np.zeros_like(screen_dtec)
-            # output solset
-            self.datapack.switch_solset("posterior_sol", 
-                    array_file=DataPack.lofar_array, 
-                    directions = np.array([directions.ra.rad, directions.dec.rad]).T)
-            # store variance in tec/weights
-            self.datapack.add_freq_indep_tab('tec', times.mjd*86400., pols = pol_labels)
-            posterior_dtec, _ = self.datapack.tec
-            posterior_dtec_var = np.zeros_like(posterior_dtec)
-
-        # data subsets
-        edges,blocks = define_subsets(X_t, self.overlap / t_std, max_block_size)
-        for subset_idx, block in enumerate(blocks):
-            start = edges[block[0]]
-            stop = edges[block[1]]
-
-            # N, 3
-            X = make_coord_array(X_d, X_t[start:stop,:], freqs[:,None])[:,:-1]
-            # Nd, Nt, Nf,2 * Npol*Na*Ntabs + 1
-            Y = data_vec[:,start:stop,:,:]
-            Y = Y.reshape((-1, Y.shape[-1]))
-
-            N = Y.shape[0]
-
-            ###
-            # Pos params using log-normal priors defined by mode and std
-
-            # Gaussian likelihood log-normal prior
-            lik_var = log_normal_solve(uncert_mean, uncert_mean*0.25)
-            # TEC mean function prior ensemble mean and variance
-            tec_mean_mu, tec_mean_var = 0./tec_scale, (0.005)**2/tec_scale**2
-            # TEC kern time lengthscale log-normal prior (seconds)
-            tec_kern_time_ls = log_normal_solve(50./t_std, 20./t_std)
-            # TEC kern dir lengthscale log-normal prior (degrees)
-            tec_kern_dir_ls = log_normal_solve(0.5/d_std, 0.3/d_std)
-            # TEC kern variance priors
-            tec_kern_sigma = 0.005/tec_scale
-            tec_kern_var = log_normal_solve(tec_kern_sigma**2,0.1*tec_kern_sigma**2)
-
-            priors = {
-                    "likelihood_var": lik_var,
-                    "tec_kern_time_ls":tec_kern_time_ls,
-                    "tec_kern_dir_ls":tec_kern_dir_ls,
-                    "tec_kern_var":tec_kern_var,
-                    "tec_mean":(tec_mean_mu, tec_mean_var)
-                    }
-
-            logging.info("likelihood var logGaussian {} median (rad) {}".format(lik_var,np.exp(lik_var[0])))
-            logging.info("tec mean Gaussian {} {}".format(tec_mean_mu*tec_scale, tec_mean_var*tec_scale**2))
-            logging.info("tec kern var logGaussian {} median (tec) {}".format(tec_kern_var,
-                    np.sqrt(np.exp(tec_kern_var[0]))*tec_scale))
-            logging.info("tec kern time ls logGaussian {} median (sec) {} ".format(tec_kern_time_ls,
-                    np.exp(tec_kern_time_ls[0])*t_std))
-            logging.info("tec kern dir ls logGaussian {} median (deg) {}".format(tec_kern_dir_ls,
-                    np.exp(tec_kern_dir_ls[0])*d_std))
-
-            M = int(np.ceil((stop - start)*X_d.shape[0] / dof_ratio))
-            Z = kmeans2(X, M, minit='points')[0] if N < 10000 \
-                    else X[np.random.choice(N,size=M,replace=False),:]
-            if M is None:
-                Z = make_coord_array(X_t[::time_skip,:],X_d[::1,:])
-            
-            graph = tf.Graph()
-            sess = self._new_session(graph, intra_op_threads, inter_op_threads)
-            summary_id = len(glob.glob(os.path.join(self.summary_dir,"summary_*")))
-            summary_folder = os.path.join(self.summary_dir,"summary_{:03d}".format(summary_id))
-            os.makedirs(summary_folder,exist_ok=True)
-            save_id = len(glob.glob(os.path.join(self.save_dir,"save_*")))
-            save_folder = os.path.join(self.save_dir,"save_{:03d}".format(save_id))
-            os.makedirs(save_folder,exist_ok=True)
-            
-            with graph.as_default(), sess.as_default(), \
-                    tf.summary.FileWriter(summary_folder, graph) as writer:
-                model = self._make_part_model(X, Y, Z, minibatch_size=minibatch_size, 
-                        eval_freq=eval_freq, tec_scale=tec_scale, num_latent=num_latent, priors=priors, shared_kernels=shared_kernels, shared_features=shared_features)
-                
-                pred_lik = np.mean(model.predict_density(X,Y))
-                logging.info("Data var-likelihood before training {}".format(pred_lik))
-                
-                train_with_adam(model, learning_rate, iterations, [SendSummary(model,writer,write_period=10), SaveModel(save_folder, save_period=1000)])
-                pred_lik = np.mean(model.predict_density(X,Y))
-                logging.info("Data var-likelihood after training {}".format(pred_lik))
-                ###
-                # predict at X
-                if subset_idx == 0:
-                    sub_start = start = edges[block[0]]
-                    sub_stop = edges[block[1]-1]
-                elif subset_idx == len(blocks)-1:
-                    sub_start = start = edges[block[0]+1]
-                    sub_stop = edges[block[1]]
-                else:
-                    sub_start = start = edges[block[0]+1]
-                    sub_stop = edges[block[1]-1]
-                Nt_sub = sub_stop - sub_start
-                Xstar = make_coord_array(X_d, X_t[sub_start:sub_stop,:], freqs[:1,None])[:,:-1]
-                # Nd*Nt_sub,3
-                ystar, varstar = model.predict_dtec(Xstar)
-
-                #Nd, Nt, Npol, Na, Ntabs
-                ystar = ystar.reshape([Nd,Nt_sub,Npol,Na,Ntabs])
-                #Npols, Nd, Na, Nt, Ntabs
-                ystar = ystar.transpose([2,0,3,1,4])
-                #Nd, Nt, Npol, Na, Ntabs
-                varstar = varstar.reshape([Nd,Nt_sub,Npol,Na,Ntabs])
-                #Npols, Nd, Na, Nt, Ntabs
-                varstar = varstar.transpose([2,0,3,1,4])
-                posterior_dtec[:,:,:,sub_start:sub_stop] = ystar[...,0]
-                posterior_dtec_var[:,:,:,sub_start:sub_stop] = varstar[...,0]
-
-        with self.datapack:
-            self.datapack.switch_solset("posterior_sol")
-#            self.datapack.select(ant=ant_sel,time=slice(sub_start,sub_stop,1), dir=dir_sel, freq=freq_sel, pol=pol_sel)
-            self.datapack.select_all()
-            self.datapack.tec = posterior_dtec
-            self.datapack.weights_tec = 1./posterior_dtec_var
-
-
+        iterator_tensor = data.make_initializable_iterator()
+        if sess is not None:
+            sess.run(iterator_tensor.initializer)
+        return iterator_tensor.initializer, iterator_tensor.get_next()

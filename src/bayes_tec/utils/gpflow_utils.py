@@ -24,7 +24,7 @@ class SendSummary(Action):
 
         # Add scalar parameters
         scalar_summaries = [tf.summary.scalar(p.pathname, tf.reshape(p.constrained_tensor, []))
-                          for p in parameters if p.size == 1]
+                          for p in parameters if (p.size == 1 and p.trainable)]
 
         scalar_summaries.append(tf.summary.scalar("optimisation/likelihood",
                                                self.model._likelihood_tensor))

@@ -1,9 +1,10 @@
 from .phase_only_solver import PhaseOnlySolver
 from ..datapack import DataPack
-from ..utils.data_utils import calculate_weights, make_data_vec, make_coord_array, define_subsets
+from ..utils.data_utils import calculate_weights, make_data_vec, make_coord_array, define_equal_subsets
 from ..utils.stat_utils import log_normal_solve
 from ..utils.gpflow_utils import train_with_adam, SendSummary, SaveModel
-from ..likelihoods import WrappedPhaseGaussian
+from ..likelihoods import WrappedPhaseGaussianMulti
+from ..kernels import ThinLayer
 from ..frames import ENU
 from ..models.homoscedastic_phaseonly_svgp import HomoscedasticPhaseOnlySVGP
 from ..logging import logging
@@ -62,22 +63,17 @@ class LMCPhaseOnlySolver(PhaseOnlySolver):
                 "tec_kern_time_ls":tec_kern_time_ls,
                 "tec_kern_dir_ls":tec_kern_dir_ls,
                 "tec_kern_var":tec_kern_var,
-                "tec_mean":(tec_mean_mu, tec_mean_var)
+                "tec_mean":(tec_mean_mu, tec_mean_var),
+                "tec_scale":tec_scale
                 }
         return priors
 
 
-    def _solve(self,X_d, X_t, freqs, X_d_screen, Y, weights, jitter=1e-6, learning_rate=1e-3, iterations=10000, minibatch_size=128, 
-            eval_freq=140e6, dof_ratio=35., tec_scale = 0.01,
+    def _solve(self,X, screen_X, Y, weights, freqs, jitter=1e-6, learning_rate=1e-3, iterations=1000, 
+            minibatch_size=128, dof_ratio=35., tec_scale = 0.001,
             intra_op_threads=0, inter_op_threads=0, overlap = 180., max_block_size = 500, **kwargs):
         """
-        Breaks up the input data into time chunks and solves with a 
-        correlated, multi-output, heterotopic Gaussian process using LMC.
-        The multi-output is formed of antennas, polarization, and time chunks.
-        Each output is assumed to have a kernel:
-        K_global[shared by all] + K_a[shared by antennas].
-        The mean is Zero by assumption (see _generate_priors).
-
+        Solves and returns posterior mean and variance at the training points.
 
         Defines the solve steps and runs them.
         It must include:
@@ -90,12 +86,11 @@ class LMCPhaseOnlySolver(PhaseOnlySolver):
         Note: Ntabs = 1 because it's phase only
 
         Params:
-        X_d : array [Nd, 2]
-        X_t : array [Nt, 1]
-        freqs : array [Nf]
-        X_d_screen : array [Nd_scren, 2]
-        Y : array  [Npols, Nd, Na, Nf, Nt, Ntabs]
-        weights : weights = 1./var of datapoints (estimated from data)
+        X: array [Nd, Na, Nt, 7] (ra, dec, kz, east, north, up, time)
+        screen_X: array [Nd_screen, Na, Nt, 7] as above
+        Y: array [Nd, Na, Nf, Nt, Npol*Ntabs]
+        weights: array [Nd, Na, Nf, Nt, Npol*Ntabs] 1/variance estimate
+        freqs: array [Nf]
         **kwargs: solver specific args passed from run call
         
         Returns:
@@ -105,99 +100,88 @@ class LMCPhaseOnlySolver(PhaseOnlySolver):
         posterior_screen_dtec_var : array [Npol, Nd_screen, Na, Nt]
         """
 
-#        overlap = kwargs.get('overlap',180.)
-#        max_block_size = kwargs.get('max_block_size', 500)
-#        time_skip = kwargs.get('time_skip', 2)
-
         uncert_mean = np.mean(1./(np.sqrt(weights)+1e-6))
         weights /= np.mean(weights)
 
-        Npol, Nd, Na, Nf, Nt, Ntabs = Y.shape
-        num_latent = Npol*Na*Ntabs
-        P = num_latent
-        Nd_screen = X_d_screen.shape[0]
+        Nd, Na, Nf, Nt, Nobs = Y.shape
+        Ntabs = 1
+        Npol = int(Nobs / Ntabs)
+        
+        Nd_screen = screen_X.shape[0]
+        ## get scaling coeffs
 
-        # Nd, Nt, Nf, Npol*Na*Ntabs
-        Y = Y.transpose((1,4,3,0,2,5)).reshape((Nd, Nt, Nf, Npol*Na*Ntabs))
-        weights = weights.transpose((1,4,3,0,2,5)).reshape((Nd, Nt, Nf, Npol*Na*Ntabs))
+        radec = X[..., 0:2].reshape((-1,2))
+        d_mean = radec.mean(0)#(2,)
+        radec = radec - d_mean
+        d_std = np.sqrt(np.mean(radec**2)) + 1e-6
+        radec /= d_std
 
-        d_std = X_d.std(0).mean() + 1e-6
-        t_std = X_t.std() + 1e-6
+        X_a = X[..., 3:6].reshape((-1,3))
+        a_mean = X_a.mean(0)
+        X_a = X_a - a_mean
+        a_std = np.sqrt(np.mean(X_a**2)) + 1e-6
+        X_a /= a_std
+        
+        ## apply scaling
 
-        X_t = (X_t - X_t.mean()) / t_std
-        d_mean = X_d.mean(0)
-        X_d = (X_d - d_mean) / d_std
-        X_d_screen = (X_d_screen - d_mean) / d_std
-        freq_bar = np.mean(1./freqs)
+        X[..., 0:2] -= d_mean
+        X[..., 0:2] /= d_std
+        X[..., 3:6] -= a_mean
+        X[..., 3:6] /= a_std
 
+        screen_X[..., 0:2] -= d_mean
+        screen_X[..., 0:2] /= d_std
+        screen_X[..., 3:6] -= a_mean
+        screen_X[..., 3:6] /= a_std
+
+        
+        X_t = X[0,0,:,6:7]#Nt, 1
+        min_overlap = int(np.ceil(overlap/(X_t[1,0] - X_t[0,0])))
+        blocks, val_blocks, inv_map = define_equal_subsets(X_t.shape[0], max_block_size, min_overlap, False)
+        block_size = blocks[0][1] - blocks[0][0]
+        M = int(np.ceil(block_size * Nd * Na / dof_ratio))
+        logging.info('Using {} inducing points'.format(M))
+        L = len(blocks)
+        
+        Kuu_size = (L*M**2*8)
+        Kuf_size = (L*M*minibatch_size * 8)
+        Kff_size = (L*minibatch_size**2 * 8)
+        logging.info('Size of Kuu is ({} x {} x {}) [{:.2f} GB]'.format(L, M, M, Kuu_size/(1<<30)))
+        logging.info('Size of Kuf is ({} x {} x {}) [{:.2f} GB]'.format(L, M, minibatch_size, Kuf_size/(1<<30)))
+        logging.info('Size of Kff is ({} x {} x {}) [{:.2f} GB]'.format(L, minibatch_size, minibatch_size, Kff_size/(1<<30)))
+        
+        # crop only one blocks required for coordinates
+        X = X[:,:,:block_size,:]
+        screen_X = screen_X[:,:,:block_size,:]
+        
+        t_std = (X[0,0,-1,6] - X[0,0,0,6])
+        X[...,6] = (X[...,6] - X[:,:,0:1,6])/t_std#(X[:,:,-1:,7] - X[:,:,0:1,7])
+        screen_X[...,6] = (screen_X[...,6] - screen_X[:,:,0:1,6]) / t_std#(screen_X[:,:,-1:,7] - screen_X[:,:,0:1,7])
+        # Nd*Na*block_size, 7
+        X = X.reshape((-1,7))
+        # Nd_screen*Na*block_size, 7
+        screen_X = screen_X.reshape((-1,7))
+
+        Z = kmeans2(X,M,minit='points')[0] if X.shape[0] < 1e4 \
+                else X[np.random.choice(X.shape[0], size=M,replace=False), :]
+
+        q_mu = np.zeros((M,L))
+        q_sqrt = np.tile(np.eye(M)[None,:,:],(L,1,1))
+
+        W = np.reshape(np.ones(Nobs)[:,None,None] * np.eye(L)[None,:,:], (Nobs*L,L))
 
         # data subsets
-        Z_subs = []
-        q_mu_subs = []
-        q_sqrt_diag_subs = []
-        W_subs = []
-        l_per_P = 1
-        edges,blocks = define_subsets(X_t, overlap / t_std, max_block_size)
-        for subset_idx, block in enumerate(blocks):
-            start = edges[block[0]]
-            stop = edges[block[1]]
+        # Nd, Na, Nf, Nt, Npol*Ntabs -> Nd, Na, Nf, L, B, Npol*Ntabs
+        Y = np.stack([Y[:,:,:,b[0]:b[1],:] for b in blocks],axis=2)
+        weights = np.stack([weights[:,:,:,b[0]:b[1],:] for b in blocks],axis=2)
+#        Y = Y.reshape((Nd, Na, L, block_size, Nf, Nobs))
+#        weights = weights.reshape((Nd, Na, L, block_size, Nf, Nobs))
+        # -> Nd*Na*B, L*Npol*Ntabs, Nf
+        Y = Y.transpose((0,1,4,3,5,2)).reshape((Nd*Na*block_size,L*Nobs,Nf))
+        weights = weights.transpose((0,1,4,3,5,2)).reshape((Nd*Na*block_size,L*Nobs,Nf))
 
-            # Nd*Nt_sub, 3
-            X_sub = make_coord_array(X_d, X_t[start:stop,:], freqs[:1,None])[:,:-1]
-            N = X_sub.shape[0]
-            M = int(np.ceil((stop - start)*X_d.shape[0] / dof_ratio))
-            logging.info('Using {} inducing points'.format(M))
-
-            idx = np.random.choice(N,size=M,replace=False)
-            Z_sub = X_sub[idx,:]
-
-
-            Y_sub = Y[:,start:stop,:,:]
-            # Nd , Nt_sub, Nf,  Npol*Na*Ntabs
-            z = np.exp(1j*Y_sub)
-            # Nd , Nt_sub,  Npol*Na*Ntabs
-            z_bar = np.mean(z,axis=2)
-            z_bar = z_bar.reshape((-1,P))[idx,:]
-            # Nd * Nt_sub, Npol*Na*Ntabs
-            f_mu_sub = np.angle(z_bar) * freq_bar / -8.440e9 / tec_scale
-            Re2 = Nf/(Nf - 1) * (z_bar*z_bar.conj() - 1./Nf)
-            # Nd * Nt_sub, Npol*Na*Ntabs
-            f_sqrt_diag_sub= np.sqrt(-np.log(Re2) * freq_bar**2 / (-8.440e9)**2 / tec_scale**2).real
-            f_sqrt_diag_sub = np.maximum(f_sqrt_diag_sub,1e-2)
-
-            # Nd * Nt_sub, Npol*Na*Ntabs
-            # f[:M, :P]
-
-            _,_,Wh = np.linalg.svd(f_mu_sub)
-            #P, l_per_P
-            W=Wh[:l_per_P,:].T
-            # M,P @ P,l_per_P -> M,l_per_P
-            q_mu_sub = f_mu_sub.dot(W)
-            # M, P @ P, l_per_P -> M,l_per_P
-            q_sqrt_diag_sub = f_sqrt_diag_sub.dot(W**2)
-
-            W_subs.append(W)
-            q_mu_subs.append(f_mu_sub)
-            q_sqrt_diag_subs.append(f_sqrt_diag_sub)
-            [Z_subs.append(Z_sub) for _ in range(l_per_P)]
-        # P,L
-        W = np.concatenate(W_subs,axis=1)
-        # M, L
-        q_mu = np.concatenate(q_mu_subs,axis=1)
-        # M, L
-        q_sqrt_diag = np.concatenate(q_sqrt_diag_subs,axis=1)
-        # L, M, M
-        q_sqrt = np.stack([np.diag(d) for d in q_sqrt_diag.T],axis=0)
-
-        print(q_mu.shape, q_sqrt.shape, len(Z_subs), W.shape)
+        P = Y.shape[1]#L*Npol*Ntabs       
         
-        
-        # Nd, Nt, Nf, 2 * Npol*Na*Ntabs + 1
-        Y = make_data_vec(Y, freqs,weights=weights)
-        # Nd * Nt * Nf, 2 * Npol*Na*Ntabs + 1
-        Y = Y.reshape((-1, 2*num_latent + 1))
-        
-        X = make_coord_array(X_d, X_t, freqs[:,None])[:,:-1]
         ###
         # priors from input stats
         priors = self._generate_priors(uncert_mean, tec_scale,t_std, d_std)
@@ -216,77 +200,101 @@ class LMCPhaseOnlySolver(PhaseOnlySolver):
 
         with graph.as_default(), sess.as_default(), \
                 tf.summary.FileWriter(summary_folder, graph) as writer:
-            model = self._make_part_model(X, Y, Z_subs, q_mu, q_sqrt, W,
+            model = self._make_part_model(X, Y, weights, Z, q_mu, q_sqrt, W,freqs,
                     minibatch_size=minibatch_size, 
-                    eval_freq=eval_freq, tec_scale=tec_scale, num_latent=num_latent, 
                     priors=priors)
+
+            ###
+            # batch predict density at X
+            def _batch_predict_density(model, X,Y,batch_size):
+                _lik= []
+                for i in range(0,X.shape[0],batch_size):
+                    X_batch = X[i:min(i+batch_size,X.shape[0]),:]
+                    Y_batch = Y[i:min(i+batch_size,Y.shape[0]),:,:]
+                    lik = model.predict_density(X_batch, Y_batch)
+                    _lik.append(lik)
+                return np.concatenate(_lik,axis=0)
+
             
 #            pred_lik = np.mean(model.predict_density(X,Y))
 #            logging.info("Data var-likelihood before training {}".format(pred_lik))
             
+            pred_lik = np.mean(_batch_predict_density(model, X,Y, minibatch_size))
+            logging.info("Data var-likelihood before training {}".format(pred_lik))
+            
             train_with_adam(model, learning_rate, iterations, [SendSummary(model,writer,write_period=10), SaveModel(save_folder, save_period=1000)])
-            pred_lik = np.mean(model.predict_density(X,Y))
+
+            pred_lik = np.mean(_batch_predict_density(model, X,Y, minibatch_size))
             logging.info("Data var-likelihood after training {}".format(pred_lik))
 
             ###
             # predict at X
-            Xstar = make_coord_array(X_d, X_t, freqs[:1,None])[:,:-1]
-            # Nd*Nt,num_latent=Npol*Na*Ntabs
-            ystar, varstar = model.predict_dtec(Xstar)
+            def _batch_predict_dtec(model, X,batch_size):
+                _ystar, _varstar = [],[]
+                for i in range(0,X.shape[0],batch_size):
+                    X_batch = X[i:min(i+batch_size,X.shape[0]),:]
+                    ystar, varstar = model.predict_dtec(X_batch)
+                    _ystar.append(ystar)
+                    _varstar.append(varstar)
+                return np.concatenate(_ystar,axis=0), np.concatenate(_varstar,axis=0)
 
-            #Nd, Nt, Npol, Na, Ntabs
-            ystar = ystar.reshape([Nd,Nt,Npol,Na,Ntabs])
-            #Npols, Nd, Na, Nt, Ntabs
-            ystar = ystar.transpose([2,0,3,1,4])
-            #Nd, Nt, Npol, Na, Ntabs
-            varstar = varstar.reshape([Nd,Nt,Npol,Na,Ntabs])
-            #Npols, Nd, Na, Nt, Ntabs
-            varstar = varstar.transpose([2,0,3,1,4])
-            posterior_dtec = ystar[...,0]
-            posterior_dtec_var = varstar[...,0]
+            def _unstack_dtec_results(results, out, inv_map):
+                Npol,Nd,Na,Nt = out.shape
+                idx = 0
+                for l, (start, stop) in enumerate(inv_map):
+                    width = stop - start
+                    out[:,:,:,idx:idx+width] = results[:,:,:,l,start:stop,0]
+                return out
 
-            ###
-            # predict at X (screen)
-            Xstar = make_coord_array(X_d_screen, X_t, freqs[:1,None])[:,:-1]
-            # Nd_screen*Nt,num_latent=Npol*Na*Ntabs
-            ystar, varstar = model.predict_dtec(Xstar)
+            logging.info("Beginning posterior predictions: minibatching {}".format(minibatch_size))
+            # Nd*Na*B,L*Npol*Ntabs
+            ystar, varstar = _batch_predict_dtec(model, X, minibatch_size)
+            logging.info("Finished posterior predictions")
 
-            #Nd_screen, Nt, Npol, Na, Ntabs
-            ystar = ystar.reshape([Nd_screen,Nt,Npol,Na,Ntabs])
-            #Npols, Nd_screen, Na, Nt, Ntabs
-            ystar = ystar.transpose([2,0,3,1,4])
-            #Nd_screen, Nt, Npol, Na, Ntabs
-            varstar = varstar.reshape([Nd_screen,Nt,Npol,Na,Ntabs])
-            #Npols, Nd_screen, Na, Nt, Ntabs
-            varstar = varstar.transpose([2,0,3,1,4])
-            posterior_screen_dtec = ystar[...,0]
-            posterior_screen_dtec_var = varstar[...,0]
-        return posterior_dtec, posterior_dtec_var, posterior_screen_dtec, posterior_screen_dtec_var
+            #Npol, Nd, Na, L, B, Ntabs
+            ystar = ystar.reshape((Nd, Na, block_size, L, Npol,Ntabs)).transpose((4,0,1,3,2,5))
+            varstar = varstar.reshape((Nd, Na, block_size, L, Npol,Ntabs)).transpose((4,0,1,3,2,5))
+            posterior_dtec = np.zeros((Npol, Nd, Na, Nt),dtype=np.float32)
+            posterior_dtec_var = np.zeros((Npol, Nd, Na, Nt),dtype=np.float32)
+            _unstack_dtec_results(ystar, posterior_dtec, inv_map)
+            _unstack_dtec_results(varstar, posterior_dtec_var, inv_map)
+
+            # Nd_screen*Na*B,L*Npol*Ntabs
+            logging.info("Beginning posterior screen predictions: minibatching {}".format(minibatch_size))
+            ystar, varstar = _batch_predict_dtec(model, screen_X, minibatch_size)
+            logging.info("Finished posterior screen predictions")
+
+            #Npol, Nd_screen, Na, L, B, Ntabs
+            ystar = ystar.reshape((Nd_screen, Na, block_size, L, Npol,Ntabs)).transpose((4,0,1,3,2,5))
+            varstar = varstar.reshape((Nd_screen, Na, block_size, L, Npol,Ntabs)).transpose((4,0,1,3,2,5))
+            posterior_screen_dtec = np.zeros((Npol, Nd_screen, Na, Nt),dtype=np.float32)
+            posterior_screen_dtec_var = np.zeros((Npol, Nd_screen, Na, Nt),dtype=np.float32)
+            _unstack_dtec_results(ystar, posterior_screen_dtec, inv_map)
+            _unstack_dtec_results(varstar, posterior_screen_dtec_var, inv_map)
+
+            return posterior_dtec, posterior_dtec_var, posterior_screen_dtec, posterior_screen_dtec_var
 
 
 
-
-    def _make_part_model(self, X, Y, Z_subs, q_mu, q_sqrt,W, minibatch_size=None, eval_freq=140e6, 
-            tec_scale=0.01, num_latent=1, priors=None):
+    def _make_part_model(self, X, Y, weights, Z, q_mu, q_sqrt, W, freqs, 
+            minibatch_size=None, priors=None):
         """
         Create a gpflow model for a selection of data
         X: array (N, Din)
-        Y: array (N, 2*P + 1)
-            See ..utils.data_utils.make_datavec
+        Y: array (N, P, Nf)
+        weights: array like Y the statistical weights of each datapoint
         minibatch_size : int 
-        Z_subs: list of array (M, Din)
+        Z: list of array (M, Din)
             The inducing points mean locations.
         q_mu: list of array (M, L)
         q_sqrt: list of array (L, M, M)
         W: array [P,L]
-        eval_freq: float the freq in Hz where evaluation occurs.
-        tec_scale : float default 0.01
-        num_latent: int equivalent to P
+        freqs: array [Nf,] the freqs
         priors : dict of priors for the global model
         Returns:
         model : gpflow.models.Model 
         """
-        N, Dout = Y.shape
+        N, P, Nf = Y.shape
         _, Din = X.shape
 
         assert priors is not None
@@ -298,68 +306,65 @@ class LMCPhaseOnlySolver(PhaseOnlySolver):
         Z_var = priors['Z_var']
 
         P,L = W.shape
-        print( X.shape, Y.shape, Z_subs[0].shape, q_mu.shape, q_sqrt.shape,W.shape)
-
-#        P = num_latent
-#        L = len(Z_subs)
 
         with defer_build():
 
             
             # Define the likelihood
-            likelihood = WrappedPhaseGaussian(tec_scale=tec_scale,freq=eval_freq)
+            likelihood = WrappedPhaseGaussianMulti(tec_scale=priors['tec_scale'],freqs=freqs)
             likelihood.variance = np.exp(likelihood_var[0]) #median as initial
             likelihood.variance.prior = LogNormal(likelihood_var[0],likelihood_var[1]**2)
             likelihood.variance.set_trainable(True)
 
             def _kern():
-                kern_time = Matern32(1,active_dims=[2])
+                kern_thin_layer = ThinLayer(np.array([0.,0.,0.]), priors['tec_scale'], 
+                        active_dims=slice(2,6,1))
+                kern_time = Matern32(1,active_dims=slice(6,7,1))
+                kern_dir = Matern32(2, active_dims=slice(0,2,1))
+                
+                ###
+                # time kern
                 kern_time.lengthscales = np.exp(tec_kern_time_ls[0])
+                kern_time.lengthscales.prior = LogNormal(tec_kern_time_ls[0],
+                        tec_kern_time_ls[1]**2)
                 kern_time.lengthscales.set_trainable(True)
-                kern_time.lengthscales.prior = LogNormal(tec_kern_time_ls[0],tec_kern_time_ls[1]**2)#gamma_prior(70./t_std, 50./t_std)
-                kern_time.variance = np.exp(tec_kern_var[0])
-                kern_time.variance.set_trainable(True)
-                kern_time.variance.prior = LogNormal(tec_kern_var[0],tec_kern_var[1]**2)#gamma_prior(0.001, 0.005)
 
-                kern_space = Matern52(2,active_dims=[0,1],variance=1.)
-                kern_space.variance.set_trainable(False)
-                kern_space.lengthscales = np.exp(tec_kern_dir_ls[0])
-                kern_space.lengthscales.set_trainable(True)
-                kern_space.lengthscales.prior = LogNormal(tec_kern_dir_ls[0],tec_kern_dir_ls[1]**2)
+                kern_time.variance = 1.#np.exp(tec_kern_var[0])
+                #kern_time.variance.prior = LogNormal(tec_kern_var[0],tec_kern_var[1]**2)
+                kern_time.variance.set_trainable(False)#
 
-#                white = White(3)
-#                white.variance = 0.0005**2/tec_scale**2
-#                white.variance.set_trainable(False) X, Y, Z_subs, q_mu, q_sqrt,W
-                kern = kern_space*kern_time
+                ###
+                # directional kern
+                kern_dir.variance = np.exp(tec_kern_var[0])
+                kern_dir.variance.prior = LogNormal(tec_kern_var[0],tec_kern_var[1]**2)
+                kern_dir.variance.set_trainable(True)
+
+                kern_dir.lengthscales = np.exp(tec_kern_dir_ls[0])
+                kern_dir.lengthscales.prior = LogNormal(tec_kern_dir_ls[0],
+                        tec_kern_dir_ls[1]**2)
+                kern_dir.lengthscales.set_trainable(True)
+
+                kern = kern_dir*kern_time#(kern_thin_layer + kern_dir)*kern_time
                 return kern
 
             kern = mk.SeparateMixedMok([_kern() for _ in range(L)], W)
-#           kern = mk.SeparateIndependentMok([_kern() for _ in range(L)])
-#
-#            kern = mk.SeparateIndependentMok([
-#                mk.SeparateMixedMok([_kern() for _ in range(P)], W) \
-#                    + mk.SeparateIndependentMok([_kern() for _ in range(P)]) \
-#                    + mk.SharedIndependentMok(_kern(), P)
-#                    ])
+
             feature_list = []
-            for Z in Z_subs:
+            for _ in range(L):
                 feat = InducingPoints(Z)
-                feat.Z.prior = Gaussian(Z,Z_var)
+                #feat.Z.prior = Gaussian(Z,Z_var)
                 feature_list.append(feat)
-            feature = mf.MixedKernelSharedMof(feature_list[0])
-#            feature = mf.SeparateIndependentMof(feature_list)
+            feature = mf.MixedKernelSeparateMof(feature_list)
 
 
             mean = Zero()
-#            mean = Constant(0.)#tec_mean_mu)
-#            mean.c.set_trainable(False)
-#            mean.c.prior = Gaussian(tec_mean[0],tec_mean[1])
 
-            model = HomoscedasticPhaseOnlySVGP(P, X, Y, kern, likelihood, 
+
+            model = HomoscedasticPhaseOnlySVGP(weights, X, Y, kern, likelihood, 
                         feat = feature,
                         mean_function=mean, 
                         minibatch_size=minibatch_size,
-                        num_latent = L, 
+                        num_latent = P, 
                         num_data = N,
                         whiten=False, q_mu = q_mu, q_sqrt=q_sqrt)
             model.compile()
