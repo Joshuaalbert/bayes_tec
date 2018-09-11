@@ -31,6 +31,10 @@ class HomoscedasticPhaseOnlySVGP(SVGP):
 
         # Get conditionals
         fmean, fvar = self._build_predict(self.X, full_cov=False, full_output_cov=False)
+        
+
+        cov = self.kern.K(self.X, full_output_cov=False)#P,N,N
+        tf.summary.image('Kxx',cov[..., None])
 
 
         # Get variational expectations.

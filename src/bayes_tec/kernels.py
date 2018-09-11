@@ -18,10 +18,10 @@ class ThinLayer(Kernel):
     Thin layer kernel see paper.
     input dims are (east, north, up, cos zenith_angle)
     """
-    def __init__(self, x0, a=400.,b=20.,l=10.,
+    def __init__(self, x0, a=400.,b=20.,l=10., tec_scale=1e-3,
                  active_dims=None, name=None):
         super().__init__(4, active_dims, name=name)
-
+        self.tec_scale = tec_scale
         # b**2 exp(2 g) sec1 sec2 K(f(x),f(x'))
 
         self.x0 = Parameter(x0, 
@@ -29,16 +29,19 @@ class ThinLayer(Kernel):
                 trainable=False)
 
 
-        g_prior = log_normal_solve(1.,np.log(100.))
-        self.expg = Parameter(1.,
-                transforms.Exp(),
-                dtype=settings.float_type, 
-                prior=LogNormal(g_prior[0],g_prior[1]**2),
-                name='thinlayer_expg')#per 10^10
+#        g_prior = log_normal_solve(1.,np.log(100.))
+#        self.expg = Parameter(1.,
+#                transforms.Exp(),
+#                dtype=settings.float_type, 
+#                prior=LogNormal(g_prior[0],g_prior[1]**2),
+#                name='thinlayer_expg')#per 10^10
 
-        v_prior = log_normal_solve(0.1,0.5) 
-        self.variance = Parameter(0.1, 
-                transform=transforms.Rescale(0.1)(transforms.positive),
+        kern_sigma = 0.005/tec_scale
+        v_prior = log_normal_solve(kern_sigma**2,0.1*kern_sigma**2)
+
+#        v_prior = log_normal_solve(,0.5) 
+        self.variance = Parameter(np.exp(v_prior[0]), 
+                transform=transforms.positive,
                 dtype=settings.float_type, 
                 prior=LogNormal(v_prior[0],v_prior[1]**2),
                 name='thinlayer_var')
@@ -58,13 +61,13 @@ class ThinLayer(Kernel):
                 prior=LogNormal(a_prior[0],a_prior[1]**2),
                 name='thinlayer_a')
         
-        b_scale = 20 # 10km scale
-        b_prior = log_normal_solve(20,20)
-        self.b = Parameter(b, 
-                transform=transforms.Rescale(b_scale)(transforms.positive),
-                dtype=settings.float_type,
-                prior=LogNormal(b_prior[0],b_prior[1]**2),
-                name='thinlayer_b')
+#        b_scale = 20 # 10km scale
+#        b_prior = log_normal_solve(20,20)
+#        self.b = Parameter(b, 
+#                transform=transforms.Rescale(b_scale)(transforms.positive),
+#                dtype=settings.float_type,
+#                prior=LogNormal(b_prior[0],b_prior[1]**2),
+#                name='thinlayer_b')
 
     @params_as_tensors
     def f(self,X):
@@ -77,6 +80,8 @@ class ThinLayer(Kernel):
         return x_
 
     def _K_M52(self,r2):
+        
+        return tf.exp(-0.5 * r2)
         r = tf.sqrt(r2)
         return (1.0 + np.sqrt(5.) * r + (5. / 3.) * r2) * tf.exp(-np.sqrt(5.) * r)
 
@@ -105,7 +110,8 @@ class ThinLayer(Kernel):
 
             # smoothed at 60 deg
             sec = 1./kz
-            return 1e-6*(self.b * self.expg)**2 *(self._K(X,X2) + self._K(X0,X0) - Ksym) * sec[:,None]*sec[None,:]
+#            return (1e-6/self.tec_scale**2)*(self.b * self.expg)**2 *
+            return (self._K(X,X2) + self._K(X0,X0) - Ksym) * sec[:,None]*sec[None,:]
 
         else:
             kz = X[:,0]
@@ -123,7 +129,8 @@ class ThinLayer(Kernel):
             # smoothed at 60 deg
             sec = 1. / kz
             sec2 = 1. / kz2
-            return 1e-6*(self.b * self.expg)**2 *(self._K(X,X2) + self._K(X0i,X0j) - Ksym) * sec[:,None] *sec2[None,:]
+            return (self._K(X,X2) + self._K(X0i,X0j) - Ksym) * sec[:,None] *sec2[None,:]
+#            return (1e-6/self.tec_scale**2)*(self.b * self.expg)**2 *(self._K(X,X2) + self._K(X0i,X0j) - Ksym) * sec[:,None] *sec2[None,:]
 
     @params_as_tensors
     def scaled_square_dist(self, X, X2):
@@ -145,7 +152,7 @@ class ThinLayer(Kernel):
         X2s = tf.reduce_sum(tf.square(X2), axis=1)
         dist = -2 * tf.matmul(X, X2, transpose_b=True)
         dist += tf.reshape(Xs, (-1, 1)) + tf.reshape(X2s, (1, -1))
-        return dist
+        return tf.maximum(dist, 1e-40)
 
     def scaled_euclid_dist(self, X, X2):
         """
@@ -153,7 +160,7 @@ class ThinLayer(Kernel):
         """
         r2 = self.scaled_square_dist(X, X2)
         # Clipping around the (single) float precision which is ~1e-45.
-        return tf.sqrt(tf.maximum(r2, 1e-40))
+        return tf.sqrt(r2)
 
     @params_as_tensors
     def Kdiag(self, X, presliced=False):
@@ -171,4 +178,5 @@ class ThinLayer(Kernel):
         r2 = tf.maximum(tf.reduce_sum(tf.square(dx),axis=1),1e-40)
         Ksym = self._K_M52(r2)
         
-        return 2.*1e-6 * tf.square(self.b * self.expg* sec) * tf.fill(tf.stack([tf.shape(X)[0]]), tf.squeeze(self.variance) )*(1. - Ksym)
+        return tf.maximum(2.*tf.square(sec) * tf.fill(tf.stack([tf.shape(X)[0]]), tf.squeeze(self.variance) )*(1. - Ksym), 1e-40)
+#        return 2.*(1e-6/self.tec_scale**2) * tf.square(self.b * self.expg* sec) * tf.fill(tf.stack([tf.shape(X)[0]]), tf.squeeze(self.variance) )*(1. - Ksym)

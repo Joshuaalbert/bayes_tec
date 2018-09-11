@@ -267,7 +267,7 @@ class DatapackPlotter(object):
                                 reverse_x=labels_in_radec)
                     else:
                         _, p = self._create_polygon_plot(points, values=None, N = None,
-                                ax=ax,cmap=cmap,overlay_points=overlap_points,
+                                ax=ax,cmap=cmap,overlay_points=overlay_points,
                                 title="{} {:.1f}km".format(title, ref_dist[c]),
                                 reverse_x=labels_in_radec)
                     p.set_clim(vmin,vmax)

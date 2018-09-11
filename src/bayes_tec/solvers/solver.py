@@ -12,6 +12,8 @@ from ..frames import ENU
 from ..utils.data_utils import make_coord_array
 from timeit import default_timer
 from concurrent import futures
+from tensorflow.python import debug as tf_debug
+
 
 def _parallel_coord_transform(array_center,time, time0, directions, screen_directions, antennas):
     enu = ENU(location=array_center, obstime=time)
@@ -55,7 +57,7 @@ class Solver(object):
             datapack = DataPack(datapack)
         self.datapack = datapack
 
-    def solve(self, **kwargs):
+    def solve(self, load_model=None, **kwargs):
         """Run the solver"""
         data_shape, build_params = self._prepare_data(self.datapack, **kwargs)
         
@@ -69,6 +71,8 @@ class Solver(object):
                 tf.summary.FileWriter(summary_folder, graph) as writer:
             _, (X, Y, weights) = self._train_dataset_iterator(data_shape, sess=sess, **kwargs)
             model = self._build_model(X, Y, weights=weights, **build_params, **kwargs)
+            if load_model is not None:
+                self._load_model(model, load_model)
             # train model
             save_id = len(glob.glob(os.path.join(self.save_dir,"save_*")))
             save_folder = os.path.join(self.save_dir,"save_{:03d}".format(save_id))
@@ -214,7 +218,7 @@ class Solver(object):
         """
         raise NotImplementedError("Must subclass")
 
-    def _new_session(self, graph, intra_op_threads=0, inter_op_threads=0, **kwargs):
+    def _new_session(self, graph, intra_op_threads=0, inter_op_threads=0, debug=False, **kwargs):
         os.environ["KMP_BLOCKTIME"] = "1"
         os.environ["KMP_SETTINGS"] = "1"
         os.environ["KMP_AFFINITY"] = "granularity=fine,verbose,compact,1,0"
@@ -224,6 +228,8 @@ class Solver(object):
         config.intra_op_parallelism_threads = intra_op_threads
         config.inter_op_parallelism_threads = inter_op_threads
         sess = tf.Session(graph=graph,config=config)
+        if debug:
+            sess = tf_debug.LocalCLIDebugWrapperSession(sess)            
         return sess
 
     def _prepare_data(self,datapack,**kwargs):
