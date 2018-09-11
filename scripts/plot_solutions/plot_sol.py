@@ -1,13 +1,15 @@
 #!/usr/bin/env python
 from bayes_tec.datapack import DataPack
 from bayes_tec.plotting.plot_datapack import animate_datapack
+from bayes_tec.logging import logging
 import argparse
 
-def run_plot(datapack, output_folder, num_processes, ant_sel, time_sel, freq_sel, pol_sel, dir_sel):
-    animate_datapack(datapack,output_folder, num_processes, labels_in_radec=True, plot_crosses=False, ant=ant_sel, dir=dir_sel, freq=freq_sel, pol=pol_sel)
+def run_plot(datapack, output_folder, num_processes, **kwargs):
+    animate_datapack(datapack,output_folder, num_processes, **kwargs)
 
 def add_args(parser):
     def _time_sel(s):
+        logging.info("Parsing {}".format(s))
         if s.lower() == 'none':
             return None
         elif '/' in s:#slice
@@ -20,6 +22,7 @@ def add_args(parser):
             return s
 
     def _ant_sel(s):
+        logging.info("Parsing {}".format(s))
         if s.lower() == 'none':
             return None
         elif '/' in s:#slice
@@ -32,6 +35,7 @@ def add_args(parser):
             return s
 
     def _dir_sel(s):
+        logging.info("Parsing {}".format(s))
         if s.lower() == 'none':
             return None
         elif '/' in s:#slice
@@ -44,6 +48,7 @@ def add_args(parser):
             return s
 
     def _pol_sel(s):
+        logging.info("Parsing {}".format(s))
         if s.lower() == 'none':
             return None
         elif ',' in s:
@@ -58,6 +63,7 @@ def add_args(parser):
         else:
             return s
     def _freq_sel(s):
+        logging.info("Parsing {}".format(s))
         if s.lower() == 'none':
             return None
         elif '/' in s:#slice
@@ -101,14 +107,29 @@ def add_args(parser):
     optional.add_argument("--freq_sel", type="freq_sel", default=None, 
                         help="""The channel selection: None, or slice format <start>/<stop>/<step>.\n""")
 
+    optional.add_argument("--plot_crosses", type="bool", default=True,
+                      help="Plot crosses in facets")
+    optional.add_argument("--labels_in_radec", type="bool", default=True,
+                      help="Labels in RA/DEC")
+
+    optional.add_argument("--plot_screen", type="bool", default=False,
+                      help="Plot a screen instead of facets (must have screen sol).")
     optional.add_argument("--num_processes", type=int, default=1,
                       help="Number of parallel plots")
     optional.add_argument("--output_folder", type=str, default="./figs",
                        help="""The output folder.""")
+    optional.add_argument("--observable", type=str, default="phase",
+                       help="""The soltab to plot""")
+    optional.add_argument("--phase_wrap", type="bool", default=True,
+                       help="""Whether to wrap the observable""")
+    optional.add_argument("--solset", type=str, default="sol000",
+                       help="""The solset to plot""")
+
 
 if __name__=='__main__':
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     add_args(parser)
     flags, unparsed = parser.parse_known_args()
+    logging.info(vars(flags))
     run_plot(**vars(flags))
 

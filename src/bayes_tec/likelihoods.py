@@ -125,21 +125,29 @@ class WrappedPhaseGaussianMulti(Likelihood):
             variance, transform=transforms.positive, dtype=settings.float_type)
         self.tec_scale = tec_scale
         self.num_gauss_hermite_points = num_gauss_hermite_points
+        self.Nf = len(freqs)
         self.freqs = tf.convert_to_tensor(freqs,dtype=settings.float_type,name='freqs') # freqs of data
         self.tec_conversion = tf.convert_to_tensor(tec_scale * -8.4480e9,dtype=settings.float_type,name='tec_conversion') # rad Hz/ tecu
         # Nf
         self.tec2phase = self.tec_conversion / self.freqs
         
     @params_as_tensors
-    def logp(self, F, Y, **kwargs):
+    def logp(self, F, **kwargs):
         """The log-likelihood function."""
         #..., Nf
+        Y = tf.stack([kwargs["Y_{}".format(i)] for i in range(self.Nf)],axis=2)
+        
         phase = F[..., None]*self.tec2phase
         dphase = wrap(phase) - wrap(Y) # Ito theorem
         
         arg = tf.stack([-0.5*tf.square(dphase + 2*np.pi*k)/self.variance - 0.5 * tf.log((2*np.pi) * self.variance) \
                 for k in range(-2,3,1)],axis=-1)
-        return tf.reduce_logsumexp(arg,axis=-1)
+        if kwargs.get("W_0") is not None:
+            W = tf.stack([kwargs["W_{}".format(i)] for i in range(self.Nf)],axis=2)
+            return tf.reduce_sum(W*tf.reduce_logsumexp(arg,axis=-1),axis=-1)
+        else:
+            return tf.reduce_sum(tf.reduce_logsumexp(arg,axis=-1),axis=-1)
+
         
     @params_as_tensors
     def conditional_mean(self, F):  # pylint: disable=R0201
@@ -188,11 +196,13 @@ class WrappedPhaseGaussianMulti(Likelihood):
         Here, we implement a default Gauss-Hermite quadrature routine, but some
         likelihoods (Gaussian, Poisson) will implement specific cases.
         """
+        Y_burst = {"Y_{}".format(i): Y[:,:,i] for i in range(self.Nf)}
+
         return ndiagquad(self.logp,
                          self.num_gauss_hermite_points,
-                         Fmu, Fvar, logspace=True, Y=Y, **kwargs)
+                         Fmu, Fvar, logspace=True, **Y_burst, **kwargs)
 
-    def variational_expectations(self, Fmu, Fvar, Y, **kwargs):
+    def variational_expectations(self, Fmu, Fvar, Y, weights, **kwargs):
         r"""
         Compute the expected log density of the data, given a Gaussian
         distribution for the function values.
@@ -205,8 +215,10 @@ class WrappedPhaseGaussianMulti(Likelihood):
         Here, we implement a default Gauss-Hermite quadrature routine, but some
         likelihoods (Gaussian, Poisson) will implement specific cases.
         """
+        Y_burst = {"Y_{}".format(i): Y[:,:,i] for i in range(self.Nf)}
+        weights_burst = {"W_{}".format(i): weights[:,:,i] for i in range(self.Nf)}
         return ndiagquad(self.logp,
                          self.num_gauss_hermite_points,
-                         Fmu, Fvar, Y=Y, **kwargs)
+                         Fmu, Fvar, **Y_burst, **weights_burst, **kwargs)
 
 

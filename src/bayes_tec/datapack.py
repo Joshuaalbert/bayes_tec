@@ -31,8 +31,32 @@ class DataPack(object):
         self._contexts_open = 0
         self._selection = None        
 
-    def switch_solset(self,solset,array_file=None,directions=None,patch_names=None):
+    def is_solset(self,solset):
+        """
+        Does solset exist
+        """
         with self:
+            if solset not in self.H.getSolsetNames():
+                return False
+            else:
+                return True
+
+    def delete_solset(self, solset):
+        with self:
+            if not self.is_solset(solset):
+                logging.warning("{} not a valid solset to delete".format(solset))
+                return
+            self.H.getSolset(solset).delete()
+
+    def switch_solset(self,solset,array_file=None,directions=None,patch_names=None):
+        """
+        returns 
+        True if already existed
+        False if it make a new one
+        """
+        with self:
+            if solset is None:
+                solset = 'sol000'
             self.solset = solset
             if self.solset not in self.H.getSolsetNames():
                 logging.info("Making solset: {}".format(self.solset))
@@ -41,6 +65,9 @@ class DataPack(object):
                     self.add_sources(directions,patch_names=patch_names)
                 if array_file is not None:
                     self.add_antennas(array_file=array_file)
+                return False
+            else:
+                return True
             
 
     def __enter__(self):
@@ -301,6 +328,10 @@ class DataPack(object):
                     vals = np.zeros([Nd,Na,Nf,Nt])
                 self._solset.makeSoltab(name, axesNames=['dir','ant','freq','time'],
                         axesVals=[dirs, ants, freqs, times],vals=vals, weights=np.ones_like(vals))
+
+    @property
+    def allowed_soltabs(self):
+        return ['phase','amplitude','tec','scalarphase','coords']
     def __getattr__(self, tab):
         """
         Links any attribute with an "axis name" to getValuesAxis("axis name")
@@ -312,7 +343,7 @@ class DataPack(object):
         """
 #        with self:
 #            tabs = self._solset.getSoltabNames()
-        tabs = ['phase','amplitude','tec','scalarphase']
+        tabs = self.allowed_soltabs
         tabs = ["weights_{}".format(t) for t in tabs] + ["axes_{}".format(t) for t in tabs] + tabs
         weight = False
         axes = False
@@ -355,7 +386,7 @@ class DataPack(object):
         
 #        with self:
 #            tabs = self._solset.getSoltabNames()
-        tabs = ['phase','amplitude','tec','scalarphase']
+        tabs = self.allowed_soltabs
         tabs = ["weights_{}".format(t) for t in tabs] + ["axes_{}".format(t) for t in tabs] + tabs
         weight = False
         axes = False

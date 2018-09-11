@@ -28,7 +28,7 @@ def import_data(ndppp_dd_sols, out_datapack, clobber,ant_sel, time_sel, freq_sel
         
     with DataPack(ndppp_dd_sols,readonly=True) as f_dd:
         f_dd.select(ant=ant_sel,time=time_sel,freq=freq_sel,dir=dir_sel,pol=pol_sel)
-        freqs = np.array([120.,130.,140.,150.,160.])*1e6
+        freqs = np.array([125.,135.,145.,155.,165.])*1e6
 
         with DataPack(out_datapack) as out:
             patch_names, directions = f_dd.sources

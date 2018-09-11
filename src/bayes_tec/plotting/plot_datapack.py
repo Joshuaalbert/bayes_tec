@@ -345,36 +345,117 @@ def make_animation(datafolder,prefix='fig',fps=4):
     if os.system('ffmpeg -framerate {} -i {}/{}-%04d.png -vf scale="trunc(iw/2)*2:trunc(ih/2)*2" -c:v libx264 -profile:v high -pix_fmt yuv420p -g 30 -r 30 {}/animation.mp4'.format(fps,datafolder,prefix,datafolder)):
         logging.info("{}/animation.mp4 exists already".format(datafolder))    
 
-def plot_phase_vs_time(datapack,output_folder,
+def plot_phase_vs_time(datapack,output_folder, solsets='sol000',
                        ant_sel=None,time_sel=None,dir_sel=None,freq_sel=None,pol_sel=None):
+
+    if not isinstance(solsets , (list,tuple)):
+        solsets = [solsets]
 
     output_folder = os.path.abspath(output_folder)
     os.makedirs(output_folder,exist_ok=True)
 
     with DataPack(datapack,readonly=True) as datapack:
-        datapack.select(ant=ant_sel,time=time_sel,dir=dir_sel,freq=freq_sel,pol=pol_sel)
-        weights,axes = datapack.weights_phase
-        freq_ind = len(axes['freq']) >> 1
-        freq = axes['freq'][freq_ind]
-        ant = axes['ant'][0]
-        phase,_ = datapack.phase
-        std = 1./np.sqrt(weights)
-        timestamps,times = datapack.get_times(axes['time'])
-        Npol,Nd,Na,Nf,Nt = phase.shape
+        phases = []
+        stds = []
+        for solset in solsets:
+            datapack.switch_solset(solset)
+            datapack.select(ant=ant_sel,time=time_sel,dir=dir_sel,freq=freq_sel,pol=pol_sel)
+            weights,axes = datapack.weights_phase
+            freq_ind = len(axes['freq']) >> 1
+            freq = axes['freq'][freq_ind]
+            ant = axes['ant'][0]
+            phase,_ = datapack.phase
+            std = 1./np.sqrt(weights)
+            timestamps,times = datapack.get_times(axes['time'])
+            phases.append(phase)
+            stds.append(std)
+        for phase in phases:
+            for s,S in zip(phase.shape,phases[0].shape):
+                assert s==S
+        Npol,Nd,Na,Nf,Nt = phases[0].shape
         fig,ax = plt.subplots()
         for p in range(Npol):
             for d in range(Nd):
                 for a in range(Na):
                     for f in range(Nf):
                         ax.cla()
-                        label = "{} {:.1f}MHz {}:{}".format(axes['pol'][p], axes['freq'][f]/1e6, axes['ant'][a], axes['dir'][d])
-                        ax.fill_between(times.mjd,phase[p,d,a,f,:]-2*std[p,d,a,f,:],phase[p,d,a,f,:]+2*std[p,d,a,f,:],alpha=0.5,label=r'$\pm2\hat{\sigma}_\phi$')#,color='blue')
-                        ax.scatter(times.mjd,phase[p,d,a,f,:],marker='+',alpha=0.3,color='black',label=label)
-                        ax.legend()
+                        for i,solset in enumerate(solsets):
+                            phase = phases[i]
+                            std = stds[i]
+                            label = "{} {} {:.1f}MHz {}:{}".format(solset, axes['pol'][p], axes['freq'][f]/1e6, axes['ant'][a], axes['dir'][d])
+                            ax.fill_between(times.mjd,phase[p,d,a,f,:]-2*std[p,d,a,f,:],phase[p,d,a,f,:]+2*std[p,d,a,f,:],alpha=0.5,label=r'$\pm2\hat{\sigma}_\phi$')#,color='blue')
+                            ax.scatter(times.mjd,phase[p,d,a,f,:],marker='+',alpha=0.3,color='black',label=label)
+                            
                         ax.set_xlabel('Time [mjd]')
                         ax.set_ylabel('Phase deviation [rad.]')
+                        ax.legend()
                         filename = "{}_{}_{}_{}MHz.png".format(axes['ant'][a], axes['dir'][d], axes['pol'][p], axes['freq'][f]/1e6 )
                         plt.savefig(os.path.join(output_folder,filename))
+
+def plot_data_vs_solution(datapack,output_folder, data_solset='sol000', solution_solset='posterior_sol', show_prior_uncert=False,
+                       ant_sel=None,time_sel=None,dir_sel=None,freq_sel=None,pol_sel=None):
+
+    output_folder = os.path.abspath(output_folder)
+    os.makedirs(output_folder,exist_ok=True)
+
+    solsets = [data_solset, solution_solset]
+    with DataPack(datapack,readonly=True) as datapack:
+        phases = []
+        stds = []
+        datapack.switch_solset(data_solset)
+        datapack.select(ant=ant_sel,time=time_sel,dir=dir_sel,freq=freq_sel,pol=pol_sel)
+        weights,axes = datapack.weights_phase
+        _,freqs = datapack.get_freqs(axes['freq'])
+        phase,_ = datapack.phase
+        std = np.where(weights > 0., 1./np.sqrt(weights), 0.)
+        timestamps,times = datapack.get_times(axes['time'])
+        phases.append(phase)
+        stds.append(std)
+
+        tec_conversion = -8.4480e9/freqs[None,None,None,:,None]
+
+        datapack.switch_solset(solution_solset)
+        datapack.select(ant=ant_sel,time=time_sel,dir=dir_sel,freq=freq_sel,pol=pol_sel)
+        weights,_ = datapack.weights_tec
+        phase,_ = datapack.tec
+        std = np.where(weights > 0., 1./np.sqrt(weights), 0.)[:,:,:,None,:]*tec_conversion
+        phases.append(phase[:,:,:,None,:]*tec_conversion)
+        stds.append(std)
+
+
+        for phase in phases:
+            for s,S in zip(phase.shape,phases[0].shape):
+                assert s==S
+        Npol,Nd,Na,Nf,Nt = phases[0].shape
+        fig,ax = plt.subplots()
+        for p in range(Npol):
+            for d in range(Nd):
+                for a in range(Na):
+                    for f in range(Nf):
+                        ax.cla()
+                        ###
+                        # Data
+                        phase = phases[0]
+                        std = stds[0]
+                        label = "{} {} {:.1f}MHz {}:{}".format(data_solset,axes['pol'][p], axes['freq'][f]/1e6, axes['ant'][a], axes['dir'][d])
+                        if show_prior_uncert:
+                            ax.fill_between(times.mjd,phase[p,d,a,f,:]-2*std[p,d,a,f,:],phase[p,d,a,f,:]+2*std[p,d,a,f,:],alpha=0.5,label=r'$\pm2\hat{\sigma}_\phi$')#,color='blue')
+                        ax.scatter(times.mjd,phase[p,d,a,f,:],marker='+',alpha=0.3,color='black',label=label)
+
+                        ###
+                        # Solution
+                        phase = phases[1]
+                        std = stds[1]
+                        label = "{}".format(solution_solset)
+                        ax.fill_between(times.mjd,phase[p,d,a,f,:]-2*std[p,d,a,f,:],phase[p,d,a,f,:]+2*std[p,d,a,f,:],alpha=0.5,label=r'$\pm2\hat{\sigma}_\phi$')#,color='blue')
+                        ax.plot(times.mjd,phase[p,d,a,f,:],label=label)
+
+                        ax.set_xlabel('Time [mjd]')
+                        ax.set_ylabel('Phase deviation [rad.]')
+                        ax.legend()
+                        filename = "{}_v_{}_{}_{}_{}_{}MHz.png".format(data_solset,solution_solset, axes['ant'][a], axes['dir'][d], axes['pol'][p], axes['freq'][f]/1e6 )
+                        plt.savefig(os.path.join(output_folder,filename))
+
 
 def test_vornoi():
     from scipy.spatial import Voronoi, voronoi_plot_2d
