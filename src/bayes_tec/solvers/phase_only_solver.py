@@ -500,11 +500,11 @@ class PhaseOnlySolver(Solver):
                 self.datapack.add_freq_indep_tab('tec', times.mjd*86400., pols = pol_labels)
                 
                 logging.info("Solving for maximum likelihood solutions using Bayesian optimization")
-                phase, axes = datapack.phase
+                phase, axes = self.datapack.phase
                 phase = phase.transpose((0,1,2,4,3))
                 shape = phase.shape
                 phase = phase.reshape((-1, Nf))
-                tec_ml, sigma_ml = solve_ml_tec(phase, freqs, batch_size=2048, max_tec=0.4, n_iter=23, t=1.)
+                tec_ml, sigma_ml = solve_ml_tec(phase, freqs, batch_size=int(1e7), max_tec=0.4, n_iter=23, t=1.)
                 tec_ml = tec_ml.reshape((Npol, Nd, Na, Nt))
                 sigma_ml = sigma_ml.reshape((Npol, Nd, Na, Nt))
                 logging.info("Finished ML solve")
