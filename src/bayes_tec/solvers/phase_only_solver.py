@@ -473,7 +473,7 @@ class PhaseOnlySolver(Solver):
                 X_screen = np.zeros((Nd_screen,Na,Nt,7),dtype=np.float32)
                 t0 = default_timer()
                 for j,time in enumerate(times):
-                    X[:,:,j:j+1,:],X_screen[:,:,j:j+1,:] = _parallel_coord_transform(self.datapack.array_center, time, times[0].mjd*86400., directions, screen_directions, antennas)
+                    X[:,:,j:j+1,:],X_screen[:,:,j:j+1,:] = self._parallel_coord_transform(self.datapack.array_center, time, times[0].mjd*86400., directions, screen_directions, antennas)
                     if (j+1) % (Nt//20) == 0:
                         time_left = (Nt - j - 1) * (default_timer() - t0)/ (j + 1)
                         logging.info("{:.2f}% done... {:.2f} seconds left".format(100*(j+1)/Nt, time_left))
