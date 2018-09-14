@@ -34,7 +34,7 @@ class HomoscedasticPhaseOnlySVGP(SVGP):
         
 
         cov = self.kern.K(self.X, full_output_cov=False)#P,N,N
-        tf.summary.image('Kxx',cov[..., None])
+#        tf.summary.image('Kxx',cov[..., None])
 
 
         # Get variational expectations.
@@ -43,7 +43,7 @@ class HomoscedasticPhaseOnlySVGP(SVGP):
 #        var_exp = var_exp * self.weights
 
         # re-scale for minibatch sizenum_gauss_hermite_points
-        scale = tf.cast(self.num_data, settings.float_type) / tf.cast(tf.shape(self.X)[0], settings.float_type)
+        scale = tf.cast(self.num_data, settings.float_type) / tf.cast(tf.shape(self.X)[0]*self.likelihood.Nf, settings.float_type)
 
         return tf.reduce_sum(var_exp) * scale - KL
 

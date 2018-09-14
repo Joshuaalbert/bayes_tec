@@ -22,7 +22,8 @@ class SendSummary(Action):
         self.writer = writer
         parameters = list(self.model.parameters)
 
-        other_summaries = tf.summary.merge_all()
+        other_summaries = tf.summary.merge_all() or []
+        
 
         # Add scalar parameters
         scalar_summaries = [tf.summary.scalar(p.pathname, tf.reshape(p.constrained_tensor, []))
@@ -41,7 +42,7 @@ class SendSummary(Action):
                           for p in parameters if p.size > 1]
         self.hist_summary = tf.summary.merge(hist_summaries)
 
-        self.summary = tf.summary.merge([self.scalar_summary,self.hist_summary, other_summaries])
+        self.summary = tf.summary.merge([self.scalar_summary,self.hist_summary] + other_summaries)
 
         
     def run(self, ctx):

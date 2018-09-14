@@ -23,7 +23,7 @@ def wrap(phi):
 
 
 class WrappedPhaseGaussianEncoded(Likelihood):
-    def __init__(self, tec_scale=0.01, freq=140e6, num_gauss_hermite_points=20, variance=1.0, name=None):
+    def __init__(self, tec_scale=0.01, num_gauss_hermite_points=20, variance=1.0, name=None):
         super().__init__(name=name)
         self.variance = Parameter(
             variance, transform=transforms.positive, dtype=settings.float_type)
@@ -140,13 +140,13 @@ class WrappedPhaseGaussianMulti(Likelihood):
         phase = F[..., None]*self.tec2phase
         dphase = wrap(phase) - wrap(Y) # Ito theorem
         
-        arg = tf.stack([-0.5*tf.square(dphase + 2*np.pi*k)/self.variance - 0.5 * tf.log((2*np.pi) * self.variance) \
-                for k in range(-2,3,1)],axis=-1)
+        arg = tf.stack([-0.5*(tf.square(dphase + 2*np.pi*k)/self.variance + tf.cast(tf.log(2*np.pi), settings.float_type) + tf.log(self.variance)) \
+                for k in range(-2,3,1)],axis=0)
         if kwargs.get("W_0") is not None:
             W = tf.stack([kwargs["W_{}".format(i)] for i in range(self.Nf)],axis=2)
-            return tf.reduce_sum(W*tf.reduce_logsumexp(arg,axis=-1),axis=-1)
+            return tf.reduce_sum(W*tf.reduce_logsumexp(arg,axis=0), axis=-1)
         else:
-            return tf.reduce_sum(tf.reduce_logsumexp(arg,axis=-1),axis=-1)
+            return tf.reduce_sum(tf.reduce_logsumexp(arg,axis=0),axis=-1)
 
         
     @params_as_tensors

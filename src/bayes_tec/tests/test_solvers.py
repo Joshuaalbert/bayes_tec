@@ -25,11 +25,13 @@ import os
 def test_new_solver():
 #    datapack = make_example_datapack(45,10,20,pols=['XX'], name='datapack_test_solver.hdf5')
 #    solver_cls = PhaseOnlySolver
-    run_dir = "run_dir_killms_new"
+    run_dir = "run_dir_killms"
     datapack = '/net/lofar1/data1/albert/git/bayes_tec/scripts/data/killms_datapack.hdf5'
 #    num_threads = 1
     solver = PhaseOnlySolver(run_dir, datapack)
-    solver.solve(solset='sol000', recalculate_coords=False, jitter=1e-4, tec_scale=0.005, screen_res=30, weight_smooth_len=40, reweight_obs=False, learning_rate=1e-2,iterations=100, minibatch_size=128, dof_ratio=40.,intra_op_threads=0, inter_op_threads=0, ant_sel='RS210HBA',time_sel=slice(0,100,1),debug=False,load_model='/home/albert/git/bayes_tec/src/bayes_tec/tests/run_dir_killms_new/run_021/checkpoints/save_000/model.hdf5')
+    solver.solve(solset='sol000', recalculate_coords=False, jitter=1e-4, tec_scale=0.005, screen_res=30, weight_smooth_len=40, reweight_obs=False, 
+            learning_rate=1e-2,iterations=5000, minibatch_size=128, dof_ratio=40.,intra_op_threads=0, inter_op_threads=0, ant_sel='RS210HBA',
+            time_sel=slice(0,100,1),debug=False)#,load_model='/home/albert/git/bayes_tec/src/bayes_tec/tests/run_dir_killms_new/run_021/checkpoints/save_000/model.hdf5')
 
 #    solver = PhaseOnlySolver('./run_dir_test_solver_killms_new', '/net/lofar1/data1/albert/git/bayes_tec/scripts/data/killms_datapack.hdf5')#'./run_dir_test_solver', 'datapack_test_solver.hdf5')
 #    

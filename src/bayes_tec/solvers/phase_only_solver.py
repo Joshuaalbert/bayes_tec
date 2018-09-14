@@ -131,6 +131,48 @@ class PhaseOnlySolver(Solver):
             for name, value in vars.items():
                 f[name] = value
 
+    def _build_kernel(self, kern_dir_ls=None, kern_space_ls=None, kern_time_ls=None, kern_var=None, **priors):
+        kern_dir = Matern32(2,active_dims=slice(1,3,1))
+        kern_dir.variance.trainable = False
+        kern_dir.lengthscales.prior = LogNormal(kern_dir_ls[0], kern_dir_ls[1]**2)
+        kern_dir.lengthscales = np.exp(kern_dir_ls[0])
+        kern_time = Matern32(1,active_dims=slice(6,7,1))
+        kern_time.variance.trainable = True
+        kern_time.variance.prior = LogNormal(kern_var[0], kern_var[1]**2)
+        kern_time.variance = np.exp(kern_var[0])
+        kern_time.lengthscales.prior = LogNormal(kern_time_ls[0], kern_time_ls[1]**2)
+        kern_time.lengthscales = np.exp(kern_time_ls[0])
+        return kern_dir*kern_time
+
+
+
+        kern_all = Matern32(7,ARD=True)
+        kern_all.lengthscales = np.exp(np.array([kern_dir_ls[0],kern_dir_ls[0],kern_dir_ls[0],kern_space_ls[0],kern_space_ls[0],kern_space_ls[0],kern_time_ls[0]]))
+        kern_all.lengthscales.prior = LogNormal(np.array([kern_dir_ls[0],kern_dir_ls[0],kern_dir_ls[0],kern_space_ls[0],kern_space_ls[0],kern_space_ls[0],kern_time_ls[0]]),
+                np.array([kern_dir_ls[1],kern_dir_ls[1],kern_dir_ls[1],kern_space_ls[1],kern_space_ls[1],kern_space_ls[1],kern_time_ls[1]])**2)
+        kern_all.variance.prior = LogNormal(kern_var[0], kern_var[1]**2)
+        kern_all.variance = np.exp(kern_var[0])
+        return kern_all
+
+
+        kern_thin_layer = ThinLayer(np.array([0.,0.,0.]), a=400, b=20., l=10., tec_scale=tec_scale,
+                active_dims=[0,3,4,5])
+        kern_pert = Matern32(3, active_dims=[1,2,6], ARD=True)
+        kern_pert.lengthscales.prior = LogNormal([kern_dir_ls[0], kern_dir_ls[0], kern_time_ls[0]], 
+                [kern_dir_ls[1]**2, kern_dir_ls[1]**2, kern_time_ls[1]**2]
+                )
+        kern_pert.lengthscales = np.exp(np.array([kern_dir_ls[0], kern_dir_ls[0], kern_time_ls[0]]))
+
+        kern_pert.variance.prior = LogNormal(kern_var[0], kern_var[1]**2)
+        kern_pert.variance = np.exp(kern_var[0])
+        
+
+        kern = kern_thin_layer + kern_pert
+        return kern
+
+
+
+
     def _build_model(self, X, Y, weights=None, freqs=None, Z=None, q_mu = None, q_sqrt = None, M=None, P=None, L=None, num_data=None, jitter=1e-6, tec_scale=0.001, **kwargs):
         """
         Build the model from the data.
@@ -145,53 +187,23 @@ class PhaseOnlySolver(Solver):
         settings.numerics.jitter = jitter
 
         priors = self._generate_priors(tec_scale)
-        likelihood_var = priors['likelihood_var']
-        kern_time_ls = priors['kern_time_ls']
-        kern_dir_ls = priors['kern_dir_ls']
-        kern_space_ls = priors['kern_space_ls']
-        kern_var = priors['kern_var']
+        likelihood_var = priors.get('likelihood_var', None)
         
         
         with gp.defer_build():
             # Define the likelihood
             likelihood = WrappedPhaseGaussianMulti(tec_scale=tec_scale,freqs=freqs)
-            likelihood.variance = np.exp(likelihood_var[0]) #median as initial
-            likelihood.variance.prior = LogNormal(likelihood_var[0],likelihood_var[1]**2)
-            likelihood.variance.transform = gp.transforms.Rescale(np.pi/180.)(gp.transforms.positive)
-            likelihood.variance.set_trainable(True)
+            likelihood.variance = 20*np.pi/180.#np.exp(likelihood_var[0]) #median as initial
+#            likelihood.variance.prior = LogNormal(likelihood_var[0],likelihood_var[1]**2)
+#            likelihood.variance.transform = gp.transforms.Rescale(np.pi/180.)(gp.transforms.positive)
+            likelihood.variance.set_trainable(False)
 
-            def _kern():
-                kern_all = Matern32(7,ARD=True)
-                kern_all.lengthscales = np.exp(np.array([kern_dir_ls[0],kern_dir_ls[0],kern_dir_ls[0],kern_space_ls[0],kern_space_ls[0],kern_space_ls[0],kern_time_ls[0]]))
-                kern_all.lengthscales.prior = LogNormal(np.array([kern_dir_ls[0],kern_dir_ls[0],kern_dir_ls[0],kern_space_ls[0],kern_space_ls[0],kern_space_ls[0],kern_time_ls[0]]),
-                        np.array([kern_dir_ls[1],kern_dir_ls[1],kern_dir_ls[1],kern_space_ls[1],kern_space_ls[1],kern_space_ls[1],kern_time_ls[1]])**2)
-                kern_all.variance.prior = LogNormal(kern_var[0], kern_var[1]**2)
-                kern_all.variance = np.exp(kern_var[0])
-                return kern_all
-
-
-                kern_thin_layer = ThinLayer(np.array([0.,0.,0.]), a=400, b=20., l=10., tec_scale=tec_scale,
-                        active_dims=[0,3,4,5])
-                kern_pert = Matern32(3, active_dims=[1,2,6], ARD=True)
-                kern_pert.lengthscales.prior = LogNormal([kern_dir_ls[0], kern_dir_ls[0], kern_time_ls[0]], 
-                        [kern_dir_ls[1]**2, kern_dir_ls[1]**2, kern_time_ls[1]**2]
-                        )
-                kern_pert.lengthscales = np.exp(np.array([kern_dir_ls[0], kern_dir_ls[0], kern_time_ls[0]]))
-
-                kern_pert.variance.prior = LogNormal(kern_var[0], kern_var[1]**2)
-                kern_pert.variance = np.exp(kern_var[0])
-                
-
-                kern = kern_thin_layer + kern_pert
-                return kern
-                
+                            
             q_mu = q_mu/tec_scale
             q_sqrt = q_sqrt/tec_scale
-            logging.debug(q_mu.shape)
-            logging.debug(q_sqrt.shape)
 
             W = np.ones((P,L))#np.random.normal(size=[P,L])
-            kern = mk.SeparateMixedMok([_kern() for _ in range(L)], W)
+            kern = mk.SeparateMixedMok([self._build_kernel(**priors) for _ in range(L)], W)
             kern.W.set_trainable(False)
             feature = mf.MixedKernelSeparateMof([InducingPoints(Z) for _ in range(L)])
             mean = Zero()
@@ -215,25 +227,26 @@ class PhaseOnlySolver(Solver):
         """
 
         # Gaussian likelihood log-normal prior
-        phase_uncert_deg = 50.
-        lik_var = log_normal_solve((phase_uncert_deg*np.pi/180.)**2, 0.5*(phase_uncert_deg*np.pi/180.)**2)
+        phase_uncert_deg = 30.
+        phase_var_rad = (phase_uncert_deg*np.pi/180.)**2
+        lik_var = log_normal_solve(phase_var_rad, 0.1*phase_var_rad)
         # TEC kern time lengthscale log-normal prior (seconds)
-        kern_time_ls = log_normal_solve(50., 40.)
+        kern_time_ls = log_normal_solve(50., 20.)
         # TEC kern dir lengthscale log-normal prior (radians)
-        kern_dir_ls = log_normal_solve(0.5*np.pi/180., 0.3*np.pi/180.)
+        kern_dir_ls = log_normal_solve(0.5*np.pi/180., 0.2*np.pi/180.)
         # kern space (km)
-        kern_space_ls = log_normal_solve(5.,10.)
+        kern_space_ls = log_normal_solve(5.,5.)
         # TEC kern variance priors
         kern_sigma = 0.005/tec_scale
         kern_var = log_normal_solve(kern_sigma**2,0.1*kern_sigma**2)
 
-        logging.info("likelihood var logGaussian {} median (rad) {}".format(lik_var,np.exp(lik_var[0])))
+        logging.info("likelihood var logGaussian {} median (deg) {}".format(lik_var,np.exp(lik_var[0])*180./np.pi))
         logging.info("tec kern var logGaussian {} median (tec) {}".format(kern_var,
                 np.sqrt(np.exp(kern_var[0]))*tec_scale))
         logging.info("tec kern time ls logGaussian {} median (sec) {} ".format(kern_time_ls,
                 np.exp(kern_time_ls[0])))
-        logging.info("tec kern dir ls logGaussian {} median (rad) {}".format(kern_dir_ls,
-                np.exp(kern_dir_ls[0])))
+        logging.info("tec kern dir ls logGaussian {} median (deg) {}".format(kern_dir_ls,
+                np.exp(kern_dir_ls[0])*180./np.pi))
         logging.info("tec kern space ls logGaussian {} median () {}".format(kern_space_ls,
                 np.exp(kern_space_ls[0])))
 
@@ -364,7 +377,7 @@ class PhaseOnlySolver(Solver):
 
             idx = np.random.choice(X.shape[0], size=M, replace=False)
             Z = X[idx,:]
-            q_mu = np.mean(np.sum(phase[idx,:,:]*freqs[None,None,:]/8.448e9, axis=-1), axis=1, keepdims=True) #M, L
+            q_mu = np.mean(np.sum(phase[idx,:,:]*freqs[None,None,:]/-8.448e9, axis=-1), axis=1, keepdims=True) #M, L
 #            q_mu = np.zeros((M,L))
             q_sqrt = 0.001*np.tile(np.eye(M)[None,:,:],(L,1,1))
 
