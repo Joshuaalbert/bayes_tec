@@ -31,7 +31,7 @@ import gpflow.multioutput.kernels as mk
 import gpflow.multioutput.features as mf
 import tensorflow as tf
 from ..bayes_opt.maximum_likelihood_tec import solve_ml_tec
-     
+from timeit import default_timer
 
 class PhaseOnlySolver(Solver):
     def __init__(self,run_dir, datapack):
