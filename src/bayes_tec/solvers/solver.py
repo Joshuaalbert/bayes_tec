@@ -110,6 +110,7 @@ class Solver(object):
                 datapack.delete_solset("X_facets")
                 datapack.delete_solset("X_screen")
 
+
             if not datapack.is_solset('X_facets') or not datapack.is_solset("X_screen"):
                 datapack.switch_solset(solset)
                 datapack.select(ant=None,time=None, dir=None, freq=None, pol=None)
@@ -156,12 +157,14 @@ class Solver(object):
                         directions = np.stack([screen_directions.ra.rad,screen_directions.dec.rad],axis=1))
                 self.datapack.add_freq_indep_tab('coords', times.mjd*86400., pols = ('kz','ra','dec','east','north','up','time'))
                 self.datapack.coords = X_screen.transpose((3,0,1,2))        
-
+                
+                self.datapack.delete_solset("screen_sol")
                 self.datapack.switch_solset("screen_sol", 
                         array_file = DataPack.lofar_array, 
                         directions = np.stack([screen_directions.ra.rad,screen_directions.dec.rad],axis=1))
                 self.datapack.add_freq_indep_tab('tec', times.mjd*86400., pols = pol_labels)
                 
+                self.datapack.delete_solset("posterior_sol")
                 self.datapack.switch_solset("posterior_sol", 
                         array_file=DataPack.lofar_array, 
                         directions = np.stack([directions.ra.rad,directions.dec.rad],axis=1))

@@ -30,6 +30,7 @@ from gpflow import defer_build
 import gpflow.multioutput.kernels as mk
 import gpflow.multioutput.features as mf
 import tensorflow as tf
+from ..bayes_opt.maximum_likelihood_tec import solve_ml_tec
      
 
 class PhaseOnlySolver(Solver):
@@ -305,17 +306,19 @@ class PhaseOnlySolver(Solver):
         self.solset = solset
         self.soltab = 'phase'
         with self.datapack:
-            self._maybe_fill_coords(self.solset, self.soltab, datapack, screen_res=screen_res, recalculate_coords=recalculate_coords, **kwargs)
+            self._maybe_fill_coords(self.solset, self.soltab, screen_res=screen_res, recalculate_coords=recalculate_coords, **kwargs)
             
             self.datapack.switch_solset(solset)
             self.datapack.select(ant=ant_sel,time=time_sel, dir=dir_sel, freq=freq_sel, pol=pol_sel)
             
             if reweight_obs:
                 logging.info("Re-calculating weights...")
-                vals, axes = self.datapack.__getattr__(self.soltab)
-                weights = calculate_weights(vals,indep_axis = -1, num_threads = None, N=weight_smooth_len, 
+                phase, axes = self.datapack.phase
+                weights = calculate_weights(phase,indep_axis = -1, num_threads = None, N=weight_smooth_len, 
                         phase_wrap=True, min_uncert=5*np.pi/180.)
-                self.datapack.__setattr__("weights_{}".format(self.soltab), weights)
+                weights_pre, axes = self.datapack.weights_phase# should be ML estimates
+                weights = 1./(1./weights_pre + 1./weights)
+                self.datapack.weights_phase = weights
 
             axes = self.datapack.__getattr__("axes_{}".format(self.soltab))
 
@@ -374,17 +377,24 @@ class PhaseOnlySolver(Solver):
                 weights = weights.transpose((1,2,4,0,3)).reshape((-1, Npol, Nf))
                 f['/data/Y'] = phase
                 f['/data/weights'] = weights
+            
+            self.datapack.switch_solset("posterior_sol")
+            self.datapack.select(ant=ant_sel,time=time_sel, dir=dir_sel, freq=freq_sel, pol=pol_sel)
+            tec_ml, _ = self.datapack.tec
+            tec_ml = tec_ml.transpose((1,2,3,0)).reshape((-1, Npol)).mean(1)#N
+
+            sigma_tec_ml, _ = self.datapack.weights_tec
+            np.sqrt(sigma_tec_ml, out=sigma_tec_ml)
+            sigma_tec_ml = 1./sigma_tec_ml
+            sigma_tec_ml = sigma_tec_ml.transpose((1,2,3,0)).reshape((-1, Npol)).mean(1)#N
 
             idx = np.random.choice(X.shape[0], size=M, replace=False)
-            Z = X[idx,:]
-            q_mu = np.mean(np.sum(phase[idx,:,:]*freqs[None,None,:]/-8.448e9, axis=-1), axis=1, keepdims=True) #M, L
-#            q_mu = np.zeros((M,L))
-            q_sqrt = 0.001*np.tile(np.eye(M)[None,:,:],(L,1,1))
+            Z = X[idx,:]#M,D
+            q_mu = np.tile(tec_ml[idx,None], (1,L))#M,L
+            q_sqrt = np.tile(np.diag(sigma_tec_ml)[None,:,:],(L,1,1))#L,M,M
 
-
-            Z = kmeans2(X,M,minit='points')[0] if X.shape[0] < 1e4 \
-                else X[np.random.choice(X.shape[0], size=M,replace=False), :]
-            
+#            Z = kmeans2(X,M,minit='points')[0] if X.shape[0] < 1e4 \
+#                else X[np.random.choice(X.shape[0], size=M,replace=False), :]
                         
             self.datapack.switch_solset(self.solset)
 
@@ -399,3 +409,119 @@ class PhaseOnlySolver(Solver):
                     'num_data':num_data}
 
             return data_shape, build_params
+
+    def _parallel_coord_transform(self, array_center,time, time0, directions, screen_directions, antennas):
+        enu = ENU(location=array_center, obstime=time)
+        enu_dirs = directions.transform_to(enu)
+        enu_ants = antennas.transform_to(enu)
+        east = enu_ants.east.to(au.km).value
+        north = enu_ants.north.to(au.km).value
+        up = enu_ants.up.to(au.km).value
+        kz = enu_dirs.up.value
+        ra = directions.ra.rad
+        dec = directions.dec.rad
+        X = make_coord_array(
+                np.stack([kz,ra,dec],axis=-1),
+                np.stack([east,north,up],axis=-1), 
+                np.array([[time.mjd*86400. - time0]]),flat=False)
+        
+        enu_dirs = screen_directions.transform_to(enu)
+        kz = enu_dirs.up.value
+        ra = screen_directions.ra.rad
+        dec = screen_directions.dec.rad
+        X_screen = make_coord_array(
+                np.stack([kz,ra,dec],axis=-1),
+                np.stack([east,north,up],axis=-1), 
+                np.array([[time.mjd*86400. - time0]]),flat=False)
+
+        return X, X_screen
+
+
+    def _maybe_fill_coords(self, solset, soltab, screen_res=30, num_threads = None, recalculate_coords=False, **kwargs):
+        with self.datapack:
+            logging.info("Calculating coordinates")
+            if recalculate_coords:
+                self.datapack.delete_solset("X_facets")
+                self.datapack.delete_solset("X_screen")
+
+
+            if not self.datapack.is_solset('X_facets') or not self.datapack.is_solset("X_screen"):
+                self.datapack.switch_solset(solset)
+                self.datapack.select(ant=None,time=None, dir=None, freq=None, pol=None)
+                axes = self.datapack.__getattr__("axes_{}".format(soltab))
+                
+                antenna_labels, antennas = self.datapack.get_antennas(axes['ant'])
+                patch_names, directions = self.datapack.get_sources(axes['dir'])
+                timestamps, times = self.datapack.get_times(axes['time'])
+                freq_labels, freqs = self.datapack.get_freqs(axes['freq'])
+                pol_labels, pols = self.datapack.get_pols(axes['pol'])
+
+                Npol, Nd, Na, Nf, Nt = len(pols), len(directions), len(antennas), len(freqs), len(times)
+                
+                screen_ra = np.linspace(np.min(directions.ra.rad) - 0.25*np.pi/180., 
+                        np.max(directions.ra.rad) + 0.25*np.pi/180., screen_res)
+                screen_dec = np.linspace(max(-90.*np.pi/180.,np.min(directions.dec.rad) - 0.25*np.pi/180.), 
+                        min(90.*np.pi/180.,np.max(directions.dec.rad) + 0.25*np.pi/180.), screen_res)
+                screen_directions = np.stack([m.flatten() \
+                        for m in np.meshgrid(screen_ra, screen_dec, indexing='ij')], axis=1)
+                screen_directions = ac.SkyCoord(screen_directions[:,0]*au.rad,screen_directions[:,1]*au.rad,frame='icrs')
+                Nd_screen = screen_res**2
+
+                ###
+                # fill them out
+                X = np.zeros((Nd,Na,Nt,7),dtype=np.float32)
+                X_screen = np.zeros((Nd_screen,Na,Nt,7),dtype=np.float32)
+                t0 = default_timer()
+                for j,time in enumerate(times):
+                    X[:,:,j:j+1,:],X_screen[:,:,j:j+1,:] = _parallel_coord_transform(self.datapack.array_center, time, times[0].mjd*86400., directions, screen_directions, antennas)
+                    if (j+1) % (Nt//20) == 0:
+                        time_left = (Nt - j - 1) * (default_timer() - t0)/ (j + 1)
+                        logging.info("{:.2f}% done... {:.2f} seconds left".format(100*(j+1)/Nt, time_left))
+
+                
+                self.datapack.switch_solset("X_facets", 
+                        array_file=DataPack.lofar_array, 
+                        directions = np.stack([directions.ra.rad,directions.dec.rad],axis=1))
+                self.datapack.add_freq_indep_tab('coords', times.mjd*86400., pols = ('kz','ra','dec','east','north','up','time'))
+                self.datapack.coords = X.transpose((3,0,1,2))
+                
+                
+                
+                self.datapack.switch_solset("X_screen", 
+                        array_file=DataPack.lofar_array, 
+                        directions = np.stack([screen_directions.ra.rad,screen_directions.dec.rad],axis=1))
+                self.datapack.add_freq_indep_tab('coords', times.mjd*86400., pols = ('kz','ra','dec','east','north','up','time'))
+                self.datapack.coords = X_screen.transpose((3,0,1,2))        
+                
+                self.datapack.delete_solset("screen_sol")
+                self.datapack.switch_solset("screen_sol", 
+                        array_file = DataPack.lofar_array, 
+                        directions = np.stack([screen_directions.ra.rad,screen_directions.dec.rad],axis=1))
+                self.datapack.add_freq_indep_tab('tec', times.mjd*86400., pols = pol_labels)
+                
+                logging.info("Solving for maximum likelihood solutions using Bayesian optimization")
+                phase, axes = datapack.phase
+                phase = phase.transpose((0,1,2,4,3))
+                shape = phase.shape
+                phase = phase.reshape((-1, Nf))
+                tec_ml, sigma_ml = solve_ml_tec(phase, freqs, batch_size=2048, max_tec=0.4, n_iter=23, t=1.)
+                tec_ml = tec_ml.reshape((Npol, Nd, Na, Nt))
+                sigma_ml = sigma_ml.reshape((Npol, Nd, Na, Nt))
+                logging.info("Finished ML solve")
+
+                self.datapack.delete_solset("posterior_sol")
+                self.datapack.switch_solset("posterior_sol", 
+                        array_file=DataPack.lofar_array, 
+                        directions = np.stack([directions.ra.rad,directions.dec.rad],axis=1))
+                self.datapack.add_freq_indep_tab('tec', times.mjd*86400., pols = pol_labels)
+
+                self.datapack.tec = tec_ml
+                tec_conversion = 8.448e9/freqs
+                nu_bar = np.mean(tec_conversion)
+                tec_var = sigma_ml*nu_bar
+                self.datapack.weights_tec = np.where(tec_var > 0., 1./tec_var, 1.)
+                
+                self.datapack.switch_solset(solset)
+
+                phase_var = np.tile(np.square(sigma_ml)[:,:,:,None,:], (1,1,1,Nf,1))
+                self.datapack.weights_phase = np.where(phase_var > 0., 1./phase_var, 1.)
