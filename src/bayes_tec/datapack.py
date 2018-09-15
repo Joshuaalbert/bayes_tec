@@ -50,14 +50,14 @@ class DataPack(object):
 
     def is_soltab(self, soltab):
         with self:
-            return soltab in self.getSolset(self.solset).getSoltabNames()
+            return soltab in self._solset.getSoltabNames()
 
     def delete_soltab(self, soltab):
         with self:
             if not self.is_soltab(soltab):
                 logging.warning("{} is not a valid soltab in solset {}".format(soltab, self.solset))
                 return
-            self.H.getSolset(self.solset).getSoltab(soltab).delete()
+            self._solset.getSoltab(soltab).delete()
 
     def switch_solset(self,solset,array_file=None,directions=None,patch_names=None):
         """

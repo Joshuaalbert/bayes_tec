@@ -10,12 +10,17 @@ def run_solve(flags):
     with DataPack(flags.datapack) as datapack:
         datapack.switch_solset(flags.solset)
         datapack.select_all()
+        axes = datapack.axes_phase
         timestamps, times = datapack.get_times(axes['time'])
         pol_labels, pols = datapack.get_pols(axes['pol'])
         datapack.delete_soltab('tec')
         datapack.add_freq_indep_tab('tec', times.mjd*86400., pols = pol_labels)
+        tec, axes = datapack.tec
 
         datapack.select(ant=flags.ant_sel, dir=flags.dir_sel, pol=flags.pol_sel, time=flags.time_sel, freq=flags.freq_sel)
+        tec, axes = datapack.tec
+
+
         phase,axes = datapack.phase
         timestamps, times = datapack.get_times(axes['time'])
         pol_labels, pols = datapack.get_pols(axes['pol'])
