@@ -1,3 +1,4 @@
+from ..logging import logging
 import tensorflow as tf
 import numpy as np
 from collections import namedtuple
@@ -204,7 +205,7 @@ def bayes_opt_iter(phase, tec_conversion, X, Y, jitter = 1e-6, num_proposal=100,
     
     return BayesOptReturn(X, Y, aq, fmean, fvar)
 
-def solve_ml_tec(phase, freqs, batch_size=1000, max_tec=0.3, num_proposal=100, n_iter = 21, init_pop = 5, t=0.5):
+def solve_ml_tec(phase, freqs, batch_size=1000, max_tec=0.3, num_proposal=100, n_iter = 21, init_pop = 5, t=0.5, verbose=False):
     tec_conversion = -8.448e9/freqs
     with tf.Session(graph=tf.Graph()) as sess:
         phase_pl = tf.placeholder(float_type)
@@ -215,8 +216,12 @@ def solve_ml_tec(phase, freqs, batch_size=1000, max_tec=0.3, num_proposal=100, n
         Xcur, Ycur = X_init, Y_init
         X_,Y_,aq_,fmean_,fvar_ = [],[],[],[],[]
         for i in range(n_iter):
+            if verbose:
+                logging.info("Starting batch {}".format(i))
             res = bayes_opt_iter(phase_pl, tec_conversion_pl, Xcur, Ycur,
                                  num_proposal=num_proposal, t = t_pl,max_tec = max_tec)
+            if verbose:
+                logging.info("Finished batch {}".format(i))
             X_.append(res.X)
             Y_.append(res.Y)
             aq_.append(res.aq)
