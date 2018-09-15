@@ -122,7 +122,18 @@ def add_args(parser):
                       help="How many proposals per iteration")
     optional.add_argument("--t", type=float, default=1.,
                        help="""Exploration parameter > 0, higher is more exploratory.""")
-    
+   # network
+    optional.add_argument("--ant_sel", type="ant_sel", default=None, 
+            help="""The antennas selection: None, regex RS*, or slice format <start>/<stop>/<step>.\n""")
+    optional.add_argument("--time_sel", type="time_sel", default=None, 
+                        help="""The antennas selection: None, or slice format <start>/<stop>/<step>.\n""")
+    optional.add_argument("--dir_sel", type="dir_sel", default=None, 
+                        help="""The direction selection: None, regex patch_???, or slice format <start>/<stop>/<step>.\n""")
+    optional.add_argument("--pol_sel", type="pol_sel", default=None, 
+                        help="""The polarization selection: None, list XX,XY,YX,YY, regex X?, or slice format <start>/<stop>/<step>.\n""")
+    optional.add_argument("--freq_sel", type="freq_sel", default=None, 
+                        help="""The channel selection: None, or slice format <start>/<stop>/<step>.\n""")
+ 
 
 
 
