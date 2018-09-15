@@ -216,12 +216,8 @@ def solve_ml_tec(phase, freqs, batch_size=1000, max_tec=0.3, num_proposal=100, n
         Xcur, Ycur = X_init, Y_init
         X_,Y_,aq_,fmean_,fvar_ = [],[],[],[],[]
         for i in range(n_iter):
-            if verbose:
-                logging.info("Starting batch {}".format(i))
             res = bayes_opt_iter(phase_pl, tec_conversion_pl, Xcur, Ycur,
                                  num_proposal=num_proposal, t = t_pl,max_tec = max_tec)
-            if verbose:
-                logging.info("Finished batch {}".format(i))
             X_.append(res.X)
             Y_.append(res.Y)
             aq_.append(res.aq)
@@ -241,10 +237,16 @@ def solve_ml_tec(phase, freqs, batch_size=1000, max_tec=0.3, num_proposal=100, n
         for i in range(0,phase.shape[0], batch_size):
             phase_batch = phase[i:min(i+batch_size,phase.shape[0]), :]
             # get results
+            if verbose:
+                logging.info("Starting batch {}".format(i))
+
             _tec, _sigma = sess.run([tec_min, phase_sigma],
                                              feed_dict={t_pl:t,
                                                         phase_pl:phase_batch,
                                                         tec_conversion_pl:tec_conversion})
+            if verbose:
+                logging.info("Finished batch {}".format(i))
+
             out_tec.append(_tec)
             out_sigma.append(_sigma)
 
