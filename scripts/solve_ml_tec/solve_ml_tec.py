@@ -9,7 +9,7 @@ def run_solve(flags):
 
     with DataPack(flags.datapack) as datapack:
         datapack.switch_solset(flags.solset)
-        datapack.select(ant=ant_sel, dir=dir_sel, pol=pol_sel, time=time_sel, freq=freq_sel)
+        datapack.select(ant=flags.ant_sel, dir=flags.dir_sel, pol=flags.pol_sel, time=flags.time_sel, freq=flags.freq_sel)
         phase,axes = datapack.phase
         timestamps, times = self.datapack.get_times(axes['time'])
         pol_labels, pols = self.datapack.get_pols(axes['pol'])
