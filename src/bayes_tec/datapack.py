@@ -58,6 +58,9 @@ class DataPack(object):
             if not self.is_soltab(soltab):
                 logging.warning("{} is not a valid soltab in solset {}".format(soltab, self.solset))
                 return
+            if not self.is_soltab(soltab):
+                logging.warning("{} is not a valid soltab in solset {}".format(soltab, self.solset))
+                return
             self._solset.getSoltab(soltab).delete()
 
     def switch_solset(self,solset,array_file=None,directions=None,patch_names=None):
