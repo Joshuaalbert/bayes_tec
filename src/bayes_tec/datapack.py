@@ -54,6 +54,7 @@ class DataPack(object):
 
     def delete_soltab(self, soltab):
         with self:
+            soltab = "{}000".format(soltab)
             if not self.is_soltab(soltab):
                 logging.warning("{} is not a valid soltab in solset {}".format(soltab, self.solset))
                 return
