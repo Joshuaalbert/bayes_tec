@@ -274,7 +274,7 @@ class PhaseOnlySolver(Solver):
         """
         dir_sel = indices[:,0]
         ant_sel = indices[:,1]
-        freq_sel = indices[:,2
+        freq_sel = indices[:,2]
         time_sel = indices[:,3]
 
         idx = np.sort(np.ravel_multi_index((dir_sel, ant_sel, freq_sel, time_sel), data_shape))

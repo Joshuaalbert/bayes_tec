@@ -72,7 +72,7 @@ class HeteroscedasticPhaseOnlySVGP(SVGP):
         Y_var = None
         return self.likelihood.predict_mean_and_var(Fmean, Fvar)
 
-    @autoflow((float_type, [None, None]), (float_type, [None, None]), (float_type, [None, None]),, (float_type, [None, None]))
+    @autoflow((float_type, [None, None]), (float_type, [None, None]), (float_type, [None, None]), (float_type, [None, None]))
     def predict_density(self, Xnew, Ynew, Yvarnew, freq):
         Fmean, Fvar = self._build_predict(Xnew, full_cov=False, full_output_cov=False)
         # Get variational expectations.
