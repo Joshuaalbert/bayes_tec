@@ -21,8 +21,8 @@ def run_solve(flags):
         datapack.add_freq_indep_tab('tec', times.mjd*86400., pols = pol_labels)
         tec_ml = tec_ml.reshape((Npol, Nd, Na, Nt))
         sigma_ml = sigma_ml.reshape((Npol, Nd, Na, Nt))
-        self.datapack.tec = tec_ml
-        self.datapack.weights_tec = np.where(sigma_ml > 0., 1./np.square(sigma_ml), 0.)#weights are 1/var
+        datapack.tec = tec_ml
+        datapack.weights_tec = np.where(sigma_ml > 0., 1./np.square(sigma_ml), 0.)#weights are 1/var
 
     
 def add_args(parser):
