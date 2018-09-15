@@ -1,4 +1,5 @@
 from ..logging import logging
+from timeit import default_timer
 import tensorflow as tf
 import numpy as np
 from collections import namedtuple
@@ -238,6 +239,7 @@ def solve_ml_tec(phase, freqs, batch_size=1000, max_tec=0.3, num_proposal=100, n
             phase_batch = phase[i:min(i+batch_size,phase.shape[0]), :]
             # get results
             if verbose:
+                t0 = default_timer()
                 logging.info("Starting batch {}".format(i))
 
             _tec, _sigma = sess.run([tec_min, phase_sigma],
@@ -245,7 +247,11 @@ def solve_ml_tec(phase, freqs, batch_size=1000, max_tec=0.3, num_proposal=100, n
                                                         phase_pl:phase_batch,
                                                         tec_conversion_pl:tec_conversion})
             if verbose:
-                logging.info("Finished batch {}".format(i))
+                t1 = default_timer()
+                dt = t1-t0
+                perc = 100.*float(i)/phase.shape[0]
+                s =phase_batch.shape[0]
+                logging.info("Finished batch {} {}% [{} {} samples/seconds {} ms/sample]".format(i,perc, dt, s/dt, dt*1000/s))
 
             out_tec.append(_tec)
             out_sigma.append(_sigma)
