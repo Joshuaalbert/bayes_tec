@@ -11,14 +11,14 @@ def run_solve(flags):
         datapack.switch_solset(flags.solset)
         datapack.select(ant=flags.ant_sel, dir=flags.dir_sel, pol=flags.pol_sel, time=flags.time_sel, freq=flags.freq_sel)
         phase,axes = datapack.phase
-        timestamps, times = self.datapack.get_times(axes['time'])
-        pol_labels, pols = self.datapack.get_pols(axes['pol'])
+        timestamps, times = datapack.get_times(axes['time'])
+        pol_labels, pols = datapack.get_pols(axes['pol'])
         _, freqs = datapack.get_freqs(axes['freq'])
         Npol, Nd, Na, Nf, Nt = phase.shape
         phase = phase.transpose((0,1,2,4,3))
         phase = phase.reshape((-1, Nf))
         tec_ml, sigma_ml = solve_ml_tec(phase, freqs, batch_size=flags.batch_size,max_tec=flags.max_tec, n_iter=flags.n_iter, t=flags.t,num_proposal=flags.num_proposal, verbose=True)
-        self.datapack.add_freq_indep_tab('tec', times.mjd*86400., pols = pol_labels)
+        datapack.add_freq_indep_tab('tec', times.mjd*86400., pols = pol_labels)
         tec_ml = tec_ml.reshape((Npol, Nd, Na, Nt))
         sigma_ml = sigma_ml.reshape((Npol, Nd, Na, Nt))
         self.datapack.tec = tec_ml
