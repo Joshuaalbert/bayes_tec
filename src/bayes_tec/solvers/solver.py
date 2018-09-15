@@ -69,8 +69,8 @@ class Solver(object):
         os.makedirs(summary_folder,exist_ok=True)
         with graph.as_default(), sess.as_default(), \
                 tf.summary.FileWriter(summary_folder, graph) as writer:
-            _, (X, Y, weights) = self._train_dataset_iterator(data_shape, sess=sess, **kwargs)
-            model = self._build_model(X, Y, weights=weights, **build_params, **kwargs)
+            _, data_tensors = self._train_dataset_iterator(data_shape, sess=sess, **kwargs)
+            model = self._build_model(*data_tensors, **build_params, **kwargs)
             if load_model is not None:
                 self._load_model(model, load_model)
             # train model
@@ -269,7 +269,7 @@ class Solver(object):
         data_shape: tuple of size of data axes e.g. (Nd, Na, Nt)
         Returns:
         TF op to init dataset iterator
-        tuple of synchrionized next data tensors (X, Y, weights)
+        tuple of synchrionized next data tensors (Y_var, freqs, X, Y) (order is how they get fed to model build)
         """
 
         def _random_coords(n):

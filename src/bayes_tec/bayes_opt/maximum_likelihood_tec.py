@@ -175,7 +175,7 @@ def bayes_opt_iter(phase, tec_conversion, X, Y, jitter = 1e-6, num_proposal=100,
 
     # proposal array
     tec_array = tf.cast(tf.linspace(-max_tec, max_tec, num_proposal), dtype=float_type)
-    grid_size = tf.cast(2*max_tec/(num_proposal-1),dtype=float_type)
+    grid_size = 2*max_tec/tf.cast((num_proposal-1),dtype=float_type)
     tec_array += tf.random_uniform((),tf.constant(0., dtype=float_type), grid_size, dtype=float_type)
     
     lik_log_sigma = tf.zeros(shape=tf.concat([tf.shape(phase)[0:1], tf.constant([1])],axis=0), dtype=float_type)
@@ -219,7 +219,7 @@ def solve_ml_tec(phase, freqs, batch_size=1000, max_tec=0.3, num_proposal=100, n
         X_,Y_,aq_,fmean_,fvar_ = [],[],[],[],[]
         for i in range(n_iter):
             res = bayes_opt_iter(phase_pl, tec_conversion_pl, Xcur, Ycur,
-                                 num_proposal=num_proposal, t = t_pl,max_tec = max_tec)
+                                 num_proposal=num_proposal, t = t_pl*(1.  + ((0.01 - t_pl)/float(n_iter)) * i), max_tec = max_tec)
             X_.append(res.X)
             Y_.append(res.Y)
             aq_.append(res.aq)
@@ -241,7 +241,7 @@ def solve_ml_tec(phase, freqs, batch_size=1000, max_tec=0.3, num_proposal=100, n
             # get results
             if verbose:
                 t0 = default_timer()
-                logging.info("Starting batch {}".format(i))
+                logging.info("Starting batch {}".format(i//batch_size))
 
             _tec, _sigma = sess.run([tec_min, phase_sigma],
                                              feed_dict={t_pl:t,
@@ -251,10 +251,10 @@ def solve_ml_tec(phase, freqs, batch_size=1000, max_tec=0.3, num_proposal=100, n
                 t1 = default_timer()
                 dt = t1-t0
                 perc = 100.*float(i)/phase.shape[0]
-                s =phase_batch.shape[0]
-                logging.info("Finished batch {} {}% [{} {} samples/seconds {} ms/sample]".format(i,perc, dt, s/dt, dt*1000/s))
+                s = phase_batch.shape[0]
+                logging.info("Finished batch {} {}% [{} {} samples/seconds {} ms/sample]".format(i//batch_size,perc, dt, s/dt, dt*1000/s))
 
             out_tec.append(_tec)
             out_sigma.append(_sigma)
 
-    return np.concatenate(out_tec, axis=0), np.concatenate(out_sigma, axis=0)
+    return np.concatenate(out_tec, axis=0), np.concatenate(out_sigma, axis=0)/np.mean(np.abs(tec_conversion))

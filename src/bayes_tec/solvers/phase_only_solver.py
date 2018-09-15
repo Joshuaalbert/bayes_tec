@@ -17,10 +17,10 @@ import uuid
 import h5py
 from ..utils.stat_utils import log_normal_solve
 from ..utils.gpflow_utils import train_with_adam, SendSummary, SaveModel
-from ..likelihoods import WrappedPhaseGaussianMulti
+from ..likelihoods import WrappedPhaseGaussianEncodedHetero
 from ..kernels import ThinLayer
 from ..frames import ENU
-from ..models.homoscedastic_phaseonly_svgp import HomoscedasticPhaseOnlySVGP
+from ..models.heteroscedastic_phaseonly_svgp import HeteroscedasticPhaseOnlySVGP
 from scipy.cluster.vq import kmeans2   
 from gpflow.priors import LogNormal, Gaussian
 from gpflow.mean_functions import Constant, Zero
@@ -174,7 +174,7 @@ class PhaseOnlySolver(Solver):
 
 
 
-    def _build_model(self, X, Y, weights=None, freqs=None, Z=None, q_mu = None, q_sqrt = None, M=None, P=None, L=None, num_data=None, jitter=1e-6, tec_scale=0.001, **kwargs):
+    def _build_model(self, X, Y, Y_var, freqs, Z=None, q_mu = None, q_sqrt = None, M=None, P=None, L=None, num_data=None, jitter=1e-6, tec_scale=0.001, **kwargs):
         """
         Build the model from the data.
         X,Y: tensors the X and Y of data
@@ -193,13 +193,12 @@ class PhaseOnlySolver(Solver):
         
         with gp.defer_build():
             # Define the likelihood
-            likelihood = WrappedPhaseGaussianMulti(tec_scale=tec_scale,freqs=freqs)
+            likelihood = WrappedPhaseGaussianEncodedHetero(tec_scale=tec_scale, K=2)
             likelihood.variance = 20*np.pi/180.#np.exp(likelihood_var[0]) #median as initial
 #            likelihood.variance.prior = LogNormal(likelihood_var[0],likelihood_var[1]**2)
 #            likelihood.variance.transform = gp.transforms.Rescale(np.pi/180.)(gp.transforms.positive)
             likelihood.variance.set_trainable(False)
-
-                            
+ 
             q_mu = q_mu/tec_scale
             q_sqrt = q_sqrt/tec_scale
 
@@ -208,7 +207,7 @@ class PhaseOnlySolver(Solver):
             kern.W.set_trainable(False)
             feature = mf.MixedKernelSeparateMof([InducingPoints(Z) for _ in range(L)])
             mean = Zero()
-            model = HomoscedasticPhaseOnlySVGP(weights, X, Y, kern, likelihood, 
+            model = HeteroscedasticPhaseOnlySVGP(Y_var, freqs, X, Y, kern, likelihood, 
                         feat = feature,
                         mean_function=mean, 
                         minibatch_size=None,
@@ -259,6 +258,7 @@ class PhaseOnlySolver(Solver):
                 "kern_space_ls":kern_space_ls,
                 "kern_var":kern_var
                 }
+
         return priors
 
 
@@ -274,19 +274,22 @@ class PhaseOnlySolver(Solver):
         """
         dir_sel = indices[:,0]
         ant_sel = indices[:,1]
-        time_sel = indices[:,2]
+        freq_sel = indices[:,2
+        time_sel = indices[:,3]
 
-        idx = np.sort(np.ravel_multi_index((dir_sel, ant_sel, time_sel), data_shape))
+        idx = np.sort(np.ravel_multi_index((dir_sel, ant_sel, freq_sel, time_sel), data_shape))
 
         with h5py.File(self.coord_file) as f:
             phase_ = f['/data/Y']
-            Y = np.stack([phase_[i,:,:] for i in idx],axis=0)
-            weights_ = f['/data/weights']
-            weights = np.stack([weights_[i,:,:] for i in idx], axis=0)
+            Y = np.stack([phase_[i,:] for i in idx],axis=0)
+            Y_var_ = f['/data/Y_var']
+            Y_var = np.stack([Y_var_[i,:] for i in idx], axis=0)
+            freqs_ = f['/data/freqs']
+            freqs = np.stack([freqs_[i,:] for i in idx], axis=0)
             X_ = f['/data/X']
             X = np.stack([X_[i,:] for i in idx], axis=0)
 
-        return X.astype(dtype),Y.astype(dtype),weights.astype(dtype)
+        return Y_var.astype(dtype), freqs.astype(dtype), X.astype(dtype), Y.astype(dtype)
         
 
 
@@ -316,8 +319,6 @@ class PhaseOnlySolver(Solver):
                 phase, axes = self.datapack.phase
                 weights = calculate_weights(phase,indep_axis = -1, num_threads = None, N=weight_smooth_len, 
                         phase_wrap=True, min_uncert=5*np.pi/180.)
-                weights_pre, axes = self.datapack.weights_phase# should be ML estimates
-                weights = 1./(1./weights_pre + 1./weights)
                 self.datapack.weights_phase = weights
 
             axes = self.datapack.__getattr__("axes_{}".format(self.soltab))
@@ -331,7 +332,7 @@ class PhaseOnlySolver(Solver):
             Npol, Nd, Na, Nf, Nt = len(pols), len(directions), len(antennas), len(freqs), len(times)
             num_data = Nt*Nd*Na
             M = int(np.ceil(Nt * Nd * Na / dof_ratio))
-            logging.info("Using {} inducing points".format(M))
+            logging.info("Using {} inducing points to model {} data points".format(M, num_data))
             P = Npol
             L = 1 #each soltab over same coordinates can be 1
 
@@ -339,7 +340,7 @@ class PhaseOnlySolver(Solver):
             ###
             # input coords not thread safe
             self.coord_file = os.path.join(self.run_dir,"data_source_{}.hdf5".format(str(uuid.uuid4())))
-            logging.info("Calculating coordinates into temporary file: {}".format(self.coord_file))
+            logging.info("Calculating coordinates into temporary async file: {}".format(self.coord_file))
 
             
 
@@ -350,56 +351,60 @@ class PhaseOnlySolver(Solver):
             self.datapack.select(ant=ant_sel,time=posterior_time_sel, dir=None, freq=freq_sel, pol=pol_sel)
             #7, Nd, Na, Nt
             X_facets, _ = self.datapack.coords
-            X_facets = X_facets.transpose((1,2,3,0)).reshape((-1,7))
+            #Nd, Na, Nt, 7
+            X_facets = X_facets.transpose((1,2,3,0))
 
             self.datapack.select(ant=ant_sel,time=time_sel, dir=dir_sel, freq=freq_sel, pol=pol_sel)
             #7, Nd, Na, Nt
             X, _ = self.datapack.coords
-            X = X.transpose((1,2,3,0)).reshape((-1,7))
+            #Nd, Na, Nt, 7
+            X = X.transpose((1,2,3,0))
+            #Nd, Na, Nf, Nt, 7
+            X = np.tile(X[:,:,None,:,:], (1,1,Nf, 1,1))
 
             self.datapack.switch_solset("X_screen")
             self.datapack.select(ant=ant_sel,time=posterior_time_sel, dir=None, freq=freq_sel, pol=pol_sel)
             #7, Nd_screen, Na, Nt
             X_screen, _ = self.datapack.coords
-            X_screen = X_screen.transpose((1,2,3,0)).reshape((-1,7))
+            #Nd_screen, Na, Nt, 7
+            X_screen = X_screen.transpose((1,2,3,0))
             
             self.datapack.switch_solset(self.solset)
             self.datapack.select(ant=ant_sel,time=time_sel, dir=dir_sel, freq=freq_sel, pol=pol_sel)
             with h5py.File(self.coord_file) as f:
-                f['/data/X'] = X
-                f['/posterior/X/facets'] = X_facets
-                f['/posterior/X/screen'] = X_screen
+                #Nd*Na*Nf*Nt, 7
+                f['/data/X'] = X.reshape((-1, 7))
+                #Nd*Na*Nt, 7
+                f['/posterior/X/facets'] = X_facets.reshape((-1,7))
+                #Nd_screen*Na*Nt, 7
+                f['/posterior/X/screen'] = X_screen.reshape((-1,7))
                 # Npol, Nd, Na, Nf, Nt
                 phase, _ = self.datapack.phase
                 weights, _ = self.datapack.weights_phase
-                # Nd, Na, Nt, Npol, Nf -> Nd*Na*Nt, Npol, Nf
-                phase = phase.transpose((1,2,4,0,3)).reshape((-1, Npol, Nf))              
-                weights = weights.transpose((1,2,4,0,3)).reshape((-1, Npol, Nf))
-                f['/data/Y'] = phase
-                f['/data/weights'] = weights
+                # Nd, Na, Nf, Nt, Npol
+                Y = phase.transpose((1,2,3,4,0))             
+                weights = weights.transpose((1,2,3,4,0))
+                Y_var = np.where(weights > 0., 1./weights, 0.)
+                f['/data/Y'] = Y.reshape((-1, Npol))
+                f['/data/Y_var'] = Y_var.reshape((-1,Npol))
+                f['/data/freqs'] = np.tile(freqs[None, None, :, None, None], (Nd, Na,1,Nt,Npol)).reshape((-1, Npol))
             
-            self.datapack.switch_solset("posterior_sol")
-            self.datapack.select(ant=ant_sel,time=time_sel, dir=dir_sel, freq=freq_sel, pol=pol_sel)
-            tec_ml, _ = self.datapack.tec
-            tec_ml = tec_ml.transpose((1,2,3,0)).reshape((-1, Npol)).mean(1)#N
+            idx = np.random.choice(num_data, size=M, replace=False)
+            Z = X[:,:,0,:,:].reshape((-1,7))[idx,:]#M,D
 
-            sigma_tec_ml, _ = self.datapack.weights_tec
-            np.sqrt(sigma_tec_ml, out=sigma_tec_ml)
-            sigma_tec_ml = 1./sigma_tec_ml
-            sigma_tec_ml = sigma_tec_ml.transpose((1,2,3,0)).reshape((-1, Npol)).mean(1)#N
+            # get ml solution at Z
+            #Nd, Na, Nt, Nf
+            q_mu = Y.mean(-1).transpose((0,1,3,2))
+            tec_ml, sigma_ml = solve_ml_tec(q_mu, freqs, batch_size=M, max_tec=0.4, n_iter=23, t=1., num_proposal=100, verbose=True)
+            q_mu = np.tile(tec_ml[:,None], (1, L)) #M,L=1
+            q_sqrt = np.tile(np.diag(sigma_ml)[None, :,:], (L, 1,1))# L, M, M
 
-            idx = np.random.choice(X.shape[0], size=M, replace=False)
-            Z = X[idx,:]#M,D
-            q_mu = np.tile(tec_ml[idx,None], (1,L))#M,L
-            q_sqrt = np.tile(np.diag(sigma_tec_ml)[None,:,:],(L,1,1))#L,M,M
 
 #            Z = kmeans2(X,M,minit='points')[0] if X.shape[0] < 1e4 \
 #                else X[np.random.choice(X.shape[0], size=M,replace=False), :]
                         
-            self.datapack.switch_solset(self.solset)
-
-            data_shape = (Nd, Na, Nt)
-            build_params = {'freqs': freqs,
+            data_shape = (Nd, Na, Nf, Nt)
+            build_params = {
                     'Z': Z,
                     'q_mu': q_mu,
                     'q_sqrt': q_sqrt,
@@ -485,8 +490,6 @@ class PhaseOnlySolver(Solver):
                 self.datapack.add_freq_indep_tab('coords', times.mjd*86400., pols = ('kz','ra','dec','east','north','up','time'))
                 self.datapack.coords = X.transpose((3,0,1,2))
                 
-                
-                
                 self.datapack.switch_solset("X_screen", 
                         array_file=DataPack.lofar_array, 
                         directions = np.stack([screen_directions.ra.rad,screen_directions.dec.rad],axis=1))
@@ -499,29 +502,10 @@ class PhaseOnlySolver(Solver):
                         directions = np.stack([screen_directions.ra.rad,screen_directions.dec.rad],axis=1))
                 self.datapack.add_freq_indep_tab('tec', times.mjd*86400., pols = pol_labels)
                 
-                logging.info("Solving for maximum likelihood solutions using Bayesian optimization")
-                phase, axes = self.datapack.phase
-                phase = phase.transpose((0,1,2,4,3))
-                shape = phase.shape
-                phase = phase.reshape((-1, Nf))
-                tec_ml, sigma_ml = solve_ml_tec(phase, freqs, batch_size=int(1e7), max_tec=0.4, n_iter=23, t=1.)
-                tec_ml = tec_ml.reshape((Npol, Nd, Na, Nt))
-                sigma_ml = sigma_ml.reshape((Npol, Nd, Na, Nt))
-                logging.info("Finished ML solve")
-
                 self.datapack.delete_solset("posterior_sol")
                 self.datapack.switch_solset("posterior_sol", 
                         array_file=DataPack.lofar_array, 
                         directions = np.stack([directions.ra.rad,directions.dec.rad],axis=1))
                 self.datapack.add_freq_indep_tab('tec', times.mjd*86400., pols = pol_labels)
 
-                self.datapack.tec = tec_ml
-                tec_conversion = 8.448e9/freqs
-                nu_bar = np.mean(tec_conversion)
-                tec_var = sigma_ml*nu_bar
-                self.datapack.weights_tec = np.where(tec_var > 0., 1./tec_var, 1.)
-                
                 self.datapack.switch_solset(solset)
-
-                phase_var = np.tile(np.square(sigma_ml)[:,:,:,None,:], (1,1,1,Nf,1))
-                self.datapack.weights_phase = np.where(phase_var > 0., 1./phase_var, 1.)
