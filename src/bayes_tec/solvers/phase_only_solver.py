@@ -85,7 +85,7 @@ class PhaseOnlySolver(Solver):
             varstar = varstar.reshape((Nd, Na, Nt, Npol)).transpose((3,0,1,2))
 
             datapack.tec = ystar
-            datapack.weights_tec = np.where(varstar > 0., 1./varstar, 1e6)        
+            datapack.weights_tec = varstar
 
     def _predict_posterior(self, model, X, **kwargs):
         """
@@ -178,7 +178,6 @@ class PhaseOnlySolver(Solver):
         """
         Build the model from the data.
         X,Y: tensors the X and Y of data
-        weights: statistical weights that may be None
 
         Returns:
         gpflow.models.Model
@@ -264,7 +263,7 @@ class PhaseOnlySolver(Solver):
 
     def _get_data(self,indices,data_shape, dtype=settings.np_float):
         """
-        Return a selection of (X,Y,weights/var)
+        Return a selection of (X,Y,var)
         indices : array of indices that index into data [N, len(data_shape)]
         data_shape : tuple of dim sizes for index raveling
         Returns:
@@ -384,7 +383,7 @@ class PhaseOnlySolver(Solver):
                 # Nd, Na, Nf, Nt, Npol
                 Y = phase.transpose((1,2,3,4,0))             
                 weights = weights.transpose((1,2,3,4,0))
-                Y_var = np.where(weights > 0., 1./weights, 0.)
+                Y_var = weights
                 f['/data/Y'] = Y.reshape((-1, Npol))
                 f['/data/Y_var'] = Y_var.reshape((-1,Npol))
                 f['/data/freqs'] = np.tile(freqs[None, None, :, None, None], (Nd, Na,1,Nt,Npol)).reshape((-1, Npol))

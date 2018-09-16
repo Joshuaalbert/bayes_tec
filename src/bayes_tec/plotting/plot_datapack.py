@@ -155,7 +155,7 @@ class DatapackPlotter(object):
             self.datapack.select(ant=ant_sel,time=time_sel,freq=freq_sel,dir=dir_sel,pol=pol_sel)
             obs,axes = self.datapack.__getattr__(observable)
             if observable.startswith('weights_'):
-                obs = np.where(obs > 0., np.sqrt(1./obs), 0.) #uncert from weights = 1/var
+                obs = np.sqrt(np.abs(obs)) #uncert from weights = 1/var
                 phase_wrap=False
             if 'pol' in axes.keys():
                 # plot only first pol selected
@@ -365,7 +365,7 @@ def plot_phase_vs_time(datapack,output_folder, solsets='sol000',
             freq = axes['freq'][freq_ind]
             ant = axes['ant'][0]
             phase,_ = datapack.phase
-            std = 1./np.sqrt(weights)
+            std = np.sqrt(np.abs(weights))
             timestamps,times = datapack.get_times(axes['time'])
             phases.append(phase)
             stds.append(std)
@@ -409,7 +409,7 @@ def plot_data_vs_solution(datapack,output_folder, data_solset='sol000', solution
         weights,axes = datapack.weights_phase
         _,freqs = datapack.get_freqs(axes['freq'])
         phase,_ = datapack.phase
-        std = np.where(weights > 0., 1./np.sqrt(weights), 0.)
+        std = np.sqrt(np.abs(weights))
         timestamps,times = datapack.get_times(axes['time'])
         phases.append(_wrap(phase))
         stds.append(std)
@@ -420,7 +420,7 @@ def plot_data_vs_solution(datapack,output_folder, data_solset='sol000', solution
         datapack.select(ant=ant_sel,time=time_sel,dir=dir_sel,freq=freq_sel,pol=pol_sel)
         weights,_ = datapack.weights_tec
         tec,_ = datapack.tec
-        std = np.where(weights > 0., 1./np.sqrt(weights), 0.)[:,:,:,None,:]*tec_conversion
+        std = np.sqrt(np.abs(weights))[:,:,:,None,:]*tec_conversion
         phases.append(_wrap(tec[:,:,:,None,:]*tec_conversion))
         stds.append(std)
 

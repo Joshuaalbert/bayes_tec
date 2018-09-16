@@ -81,7 +81,7 @@ def calculate_weights(Y,indep_axis=-1, N=200,phase_wrap=True, min_uncert=1e-3, n
             var += (r - mean)**2
         var /= N
     var = np.maximum(min_uncert**2, var)
-    return 1./var
+    return var
     
 def make_data_vec(Y,freqs,weights=None):
     """

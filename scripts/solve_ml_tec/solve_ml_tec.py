@@ -33,7 +33,7 @@ def run_solve(flags):
         tec_ml = tec_ml.reshape((Npol, Nd, Na, Nt))
         sigma_ml = sigma_ml.reshape((Npol, Nd, Na, Nt))
         datapack.tec = tec_ml
-        datapack.weights_tec = np.where(sigma_ml > 0., 1./np.square(sigma_ml), 0.)#weights are 1/var
+        datapack.weights_tec = np.square(sigma_ml)
 
     
 def add_args(parser):
