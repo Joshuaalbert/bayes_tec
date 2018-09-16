@@ -111,9 +111,10 @@ def add_args(parser):
                       help="Plot crosses in facets")
     optional.add_argument("--labels_in_radec", type="bool", default=True,
                       help="Labels in RA/DEC")
-
     optional.add_argument("--plot_screen", type="bool", default=False,
-                      help="Plot a screen instead of facets (must have screen sol).")
+                      help="Whether to plot screen. Expects properly shaped array.")
+
+
     optional.add_argument("--num_processes", type=int, default=1,
                       help="Number of parallel plots")
     optional.add_argument("--output_folder", type=str, default="./figs",
@@ -124,6 +125,11 @@ def add_args(parser):
                        help="""Whether to wrap the observable""")
     optional.add_argument("--solset", type=str, default="sol000",
                        help="""The solset to plot""")
+
+    optional.add_argument("--vmin", type=float, default=None,
+                       help="""The min value if phase_wrap is False""")
+    optional.add_argument("--vmax", type=float, default=None,
+                       help="""The max value if phase_wrap is False""")
 
 
 if __name__=='__main__':

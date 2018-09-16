@@ -155,7 +155,7 @@ class DatapackPlotter(object):
             self.datapack.select(ant=ant_sel,time=time_sel,freq=freq_sel,dir=dir_sel,pol=pol_sel)
             obs,axes = self.datapack.__getattr__(observable)
             if observable.startswith('weights_'):
-                obs = np.sqrt(1./obs) #uncert from weights = 1/var
+                obs = np.where(obs > 0., np.sqrt(1./obs), 0.) #uncert from weights = 1/var
                 phase_wrap=False
             if 'pol' in axes.keys():
                 # plot only first pol selected
@@ -394,6 +394,8 @@ def plot_phase_vs_time(datapack,output_folder, solsets='sol000',
 
 def plot_data_vs_solution(datapack,output_folder, data_solset='sol000', solution_solset='posterior_sol', show_prior_uncert=False,
                        ant_sel=None,time_sel=None,dir_sel=None,freq_sel=None,pol_sel=None):
+    def _wrap(phi):
+        return np.angle(np.exp(1j*phi))
 
     output_folder = os.path.abspath(output_folder)
     os.makedirs(output_folder,exist_ok=True)
@@ -409,7 +411,7 @@ def plot_data_vs_solution(datapack,output_folder, data_solset='sol000', solution
         phase,_ = datapack.phase
         std = np.where(weights > 0., 1./np.sqrt(weights), 0.)
         timestamps,times = datapack.get_times(axes['time'])
-        phases.append(phase)
+        phases.append(_wrap(phase))
         stds.append(std)
 
         tec_conversion = -8.4480e9/freqs[None,None,None,:,None]
@@ -417,9 +419,9 @@ def plot_data_vs_solution(datapack,output_folder, data_solset='sol000', solution
         datapack.switch_solset(solution_solset)
         datapack.select(ant=ant_sel,time=time_sel,dir=dir_sel,freq=freq_sel,pol=pol_sel)
         weights,_ = datapack.weights_tec
-        phase,_ = datapack.tec
+        tec,_ = datapack.tec
         std = np.where(weights > 0., 1./np.sqrt(weights), 0.)[:,:,:,None,:]*tec_conversion
-        phases.append(phase[:,:,:,None,:]*tec_conversion)
+        phases.append(_wrap(tec[:,:,:,None,:]*tec_conversion))
         stds.append(std)
 
 
@@ -446,7 +448,7 @@ def plot_data_vs_solution(datapack,output_folder, data_solset='sol000', solution
                         # Solution
                         phase = phases[1]
                         std = stds[1]
-                        label = "{}".format(solution_solset)
+                        label = "Solution: {}".format(solution_solset)
                         ax.fill_between(times.mjd,phase[p,d,a,f,:]-2*std[p,d,a,f,:],phase[p,d,a,f,:]+2*std[p,d,a,f,:],alpha=0.5,label=r'$\pm2\hat{\sigma}_\phi$')#,color='blue')
                         ax.plot(times.mjd,phase[p,d,a,f,:],label=label)
 
