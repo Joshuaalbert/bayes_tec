@@ -250,7 +250,7 @@ def solve_ml_tec(phase, freqs, batch_size=1000, max_tec=0.3, num_proposal=100, n
             if verbose:
                 t1 = default_timer()
                 dt = t1-t0
-                perc = 100.*float(i)/phase.shape[0]
+                perc = 100.*float(i+1)/phase.shape[0]
                 s = phase_batch.shape[0]
                 logging.info("Finished batch {} {}% [{} {} samples/seconds {} ms/sample]".format(i//batch_size,perc, dt, s/dt, dt*1000/s))
 
