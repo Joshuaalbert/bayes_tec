@@ -125,9 +125,9 @@ def add_args(parser):
 
     optional.add_argument("--batch_size", type=int, default=10000,
                        help="""The batch size of solve.""")
-    optional.add_argument("--max_tec", type=float, default=0.3,
+    optional.add_argument("--max_tec", type=float, default=0.4,
                        help="""Max TEC abs TEC scale > 0.""")
-    optional.add_argument("--n_iter", type=int, default=23, 
+    optional.add_argument("--n_iter", type=int, default=25, 
                       help="How many iterations to run")
     optional.add_argument("--num_proposal", type=int, default=100, 
                       help="How many proposals per iteration")

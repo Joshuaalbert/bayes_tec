@@ -32,6 +32,7 @@ import gpflow.multioutput.features as mf
 import tensorflow as tf
 from ..bayes_opt.maximum_likelihood_tec import solve_ml_tec
 from timeit import default_timer
+from bayes_tec.bayes_opt.maximum_likelihood_tec import solve_ml_tec
 
 class PhaseOnlySolver(Solver):
     def __init__(self,run_dir, datapack):
@@ -315,10 +316,31 @@ class PhaseOnlySolver(Solver):
             
             if reweight_obs:
                 logging.info("Re-calculating weights...")
-                phase, axes = self.datapack.phase
-                weights = calculate_weights(phase,indep_axis = -1, num_threads = None, N=weight_smooth_len, 
-                        phase_wrap=True, min_uncert=5*np.pi/180.)
-                self.datapack.weights_phase = weights
+                datapack.select_all()
+                axes = datapack.axes_phase
+                timestamps, times = datapack.get_times(axes['time'])
+                pol_labels, pols = datapack.get_pols(axes['pol'])
+                datapack.delete_soltab('tec')
+                datapack.add_freq_indep_tab('tec', times.mjd*86400., pols = pol_labels)
+
+                phase,axes = datapack.phase
+                _, freqs = datapack.get_freqs(axes['freq'])
+
+                Npol, Nd, Na, Nf, Nt = phase.shape
+                phase = phase.transpose((0,1,2,4,3))
+                phase = phase.reshape((-1, Nf))
+                tec_ml, sigma_ml = solve_ml_tec(phase, freqs, batch_size=1e6,
+                        max_tec=0.3, n_iter=25, t=1.5,
+                        num_proposal=100, verbose=True)
+                tec_ml = tec_ml.reshape((Npol, Nd, Na, Nt))
+                sigma_ml = sigma_ml.reshape((Npol, Nd, Na, Nt))
+                datapack.tec = tec_ml
+                datapack.weights_tec = np.square(sigma_ml)
+
+#                phase, axes = self.datapack.phase
+#                weights = calculate_weights(phase,indep_axis = -1, num_threads = None, N=weight_smooth_len, 
+#                        phase_wrap=True, min_uncert=5*np.pi/180.)
+                self.datapack.weights_phase = sigma_ml[...,None]*(-8.4480e9/freqs)
 
             axes = self.datapack.__getattr__("axes_{}".format(self.soltab))
 
@@ -339,9 +361,7 @@ class PhaseOnlySolver(Solver):
             ###
             # input coords not thread safe
             self.coord_file = os.path.join(self.run_dir,"data_source_{}.hdf5".format(str(uuid.uuid4())))
-            logging.info("Calculating coordinates into temporary async file: {}".format(self.coord_file))
-
-            
+            logging.info("Calculating coordinates into temporary async file: {}".format(self.coord_file))  
 
             if posterior_time_sel is None:
                 posterior_time_sel = time_sel
