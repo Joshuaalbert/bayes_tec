@@ -175,7 +175,7 @@ class PhaseOnlySolver(Solver):
 
 
 
-    def _build_model(self, X, Y, Y_var, freqs, Z=None, q_mu = None, q_sqrt = None, M=None, P=None, L=None, num_data=None, jitter=1e-6, tec_scale=0.001, **kwargs):
+    def _build_model(self, Y_var, freqs, X, Y, Z=None, q_mu = None, q_sqrt = None, M=None, P=None, L=None, num_data=None, jitter=1e-6, tec_scale=0.001, **kwargs):
         """
         Build the model from the data.
         X,Y: tensors the X and Y of data
@@ -194,10 +194,10 @@ class PhaseOnlySolver(Solver):
         with gp.defer_build():
             # Define the likelihood
             likelihood = WrappedPhaseGaussianEncodedHetero(tec_scale=tec_scale, K=2)
-            likelihood.variance = 20*np.pi/180.#np.exp(likelihood_var[0]) #median as initial
-#            likelihood.variance.prior = LogNormal(likelihood_var[0],likelihood_var[1]**2)
+            likelihood.variance = 5*np.pi/180.#np.exp(likelihood_var[0]) #median as initial
+            likelihood.variance.prior = LogNormal(likelihood_var[0],likelihood_var[1]**2)
 #            likelihood.variance.transform = gp.transforms.Rescale(np.pi/180.)(gp.transforms.positive)
-            likelihood.variance.set_trainable(False)
+            likelihood.variance.set_trainable(True)
  
             q_mu = q_mu/tec_scale
             q_sqrt = q_sqrt/tec_scale
@@ -227,11 +227,11 @@ class PhaseOnlySolver(Solver):
         """
 
         # Gaussian likelihood log-normal prior
-        phase_uncert_deg = 30.
+        phase_uncert_deg = 5.
         phase_var_rad = (phase_uncert_deg*np.pi/180.)**2
         lik_var = log_normal_solve(phase_var_rad, 0.1*phase_var_rad)
         # TEC kern time lengthscale log-normal prior (seconds)
-        kern_time_ls = log_normal_solve(50., 20.)
+        kern_time_ls = log_normal_solve(100., 50.)
         # TEC kern dir lengthscale log-normal prior (radians)
         kern_dir_ls = log_normal_solve(0.5*np.pi/180., 0.2*np.pi/180.)
         # kern space (km)
@@ -335,12 +335,12 @@ class PhaseOnlySolver(Solver):
                 tec_ml = tec_ml.reshape((Npol, Nd, Na, Nt))
                 sigma_ml = sigma_ml.reshape((Npol, Nd, Na, Nt))
                 datapack.tec = tec_ml
-                datapack.weights_tec = np.square(sigma_ml)
+                datapack.weights_tec = 1./np.square(sigma_ml)
 
 #                phase, axes = self.datapack.phase
 #                weights = calculate_weights(phase,indep_axis = -1, num_threads = None, N=weight_smooth_len, 
 #                        phase_wrap=True, min_uncert=5*np.pi/180.)
-                self.datapack.weights_phase = sigma_ml[...,None]*(-8.4480e9/freqs)
+                self.datapack.weights_phase = 1./np.square(sigma_ml[...,None]*(-8.4480e9/freqs))
 
             axes = self.datapack.__getattr__("axes_{}".format(self.soltab))
 
@@ -403,7 +403,7 @@ class PhaseOnlySolver(Solver):
                 # Nd, Na, Nf, Nt, Npol
                 Y = phase.transpose((1,2,3,4,0))             
                 weights = weights.transpose((1,2,3,4,0))
-                Y_var = weights
+                Y_var = 1./weights
                 f['/data/Y'] = Y.reshape((-1, Npol))
                 f['/data/Y_var'] = Y_var.reshape((-1,Npol))
                 f['/data/freqs'] = np.tile(freqs[None, None, :, None, None], (Nd, Na,1,Nt,Npol)).reshape((-1, Npol))
@@ -412,9 +412,9 @@ class PhaseOnlySolver(Solver):
             Z = X[:,:,0,:,:].reshape((-1,7))[idx,:]#M,D
 
             # get ml solution at Z
-            #Nd, Na, Nt, Nf
-            q_mu = Y.mean(-1).transpose((0,1,3,2))
-            tec_ml, sigma_ml = solve_ml_tec(q_mu, freqs, batch_size=M, max_tec=0.4, n_iter=23, t=1., num_proposal=100, verbose=True)
+            #Nd, Na, Nt, Nf -> M, Nf
+            q_mu = Y.mean(-1).transpose((0,1,3,2)).reshape(-1,Nf)[idx,:]
+            tec_ml, sigma_ml = solve_ml_tec(q_mu, freqs, batch_size=M, max_tec=0.3, n_iter=25, t=1.5, num_proposal=100, verbose=True)
             q_mu = np.tile(tec_ml[:,None], (1, L)) #M,L=1
             q_sqrt = np.tile(np.diag(sigma_ml)[None, :,:], (L, 1,1))# L, M, M
 
@@ -506,13 +506,13 @@ class PhaseOnlySolver(Solver):
                 self.datapack.switch_solset("X_facets", 
                         array_file=DataPack.lofar_array, 
                         directions = np.stack([directions.ra.rad,directions.dec.rad],axis=1))
-                self.datapack.add_freq_indep_tab('coords', times.mjd*86400., pols = ('kz','ra','dec','east','north','up','time'))
+                self.datapack.add_freq_indep_tab('coords', times.mjd*86400., pols = ('kz','ra','dec','east','north','up','time'), weight_dtype='f16')
                 self.datapack.coords = X.transpose((3,0,1,2))
                 
                 self.datapack.switch_solset("X_screen", 
                         array_file=DataPack.lofar_array, 
                         directions = np.stack([screen_directions.ra.rad,screen_directions.dec.rad],axis=1))
-                self.datapack.add_freq_indep_tab('coords', times.mjd*86400., pols = ('kz','ra','dec','east','north','up','time'))
+                self.datapack.add_freq_indep_tab('coords', times.mjd*86400., pols = ('kz','ra','dec','east','north','up','time'),weight_dtype='f16')
                 self.datapack.coords = X_screen.transpose((3,0,1,2))        
                 
                 self.datapack.delete_solset("screen_sol")

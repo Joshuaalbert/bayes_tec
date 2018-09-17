@@ -176,7 +176,7 @@ def bayes_opt_iter(phase, tec_conversion, X, Y, jitter = 1e-6, num_proposal=100,
     # proposal array
     tec_array = tf.cast(tf.linspace(-max_tec, max_tec, num_proposal), dtype=float_type)
     grid_size = 2*max_tec/tf.cast((num_proposal-1),dtype=float_type)
-    tec_array += tf.random_uniform((),tf.constant(0., dtype=float_type), grid_size, dtype=float_type)
+    tec_array += tf.random_uniform(tf.shape(tec_array),tf.constant(0., dtype=float_type), grid_size, dtype=float_type)
     
     lik_log_sigma = tf.zeros(shape=tf.concat([tf.shape(phase)[0:1], tf.constant([1])],axis=0), dtype=float_type)
     lik_sigma = lik_sigma*tf.exp(lik_log_sigma)
@@ -250,7 +250,7 @@ def solve_ml_tec(phase, freqs, batch_size=1000, max_tec=0.3, num_proposal=100, n
             if verbose:
                 t1 = default_timer()
                 dt = t1-t0
-                perc = min(100.*float(i+batch_shape)/phase.shape[0], 100.)
+                perc = min(100.*float(i+batch_size)/phase.shape[0], 100.)
                 s = phase_batch.shape[0]
                 logging.info("Finished batch {} {}% [{} {} samples/seconds {} ms/sample]".format(i//batch_size,perc, dt, s/dt, dt*1000/s))
 

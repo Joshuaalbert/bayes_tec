@@ -33,7 +33,8 @@ def run_solve(flags):
         tec_ml = tec_ml.reshape((Npol, Nd, Na, Nt))
         sigma_ml = sigma_ml.reshape((Npol, Nd, Na, Nt))
         datapack.tec = tec_ml
-        datapack.weights_tec = np.square(sigma_ml)
+        datapack.weights_tec = 1./np.square(sigma_ml)
+        datapack.weight_phase = 1./np.square(sigma_ml[:,:,:,None,:]*-8.4480e9/freqs[:,None])
 
     
 def add_args(parser):
