@@ -309,12 +309,12 @@ class DataPack(object):
                 if vals is None:
                     vals = np.zeros([Npol,Nd,Na,Nt])
                 self._solset.makeSoltab(name, axesNames=['pol','dir','ant','time'],
-                        axesVals=[pols, dirs, ants, times],vals=vals, weights=np.ones_like(vals))
+                        axesVals=[pols, dirs, ants, times],vals=vals, weights=np.ones_like(vals), weightDtype='f64')
             else:
                 if vals is None:
                     vals = np.zeros([Nd,Na,Nt])
                 self._solset.makeSoltab(name, axesNames=['dir','ant','time'],
-                        axesVals=[dirs, ants, times],vals=vals, weights=np.ones_like(vals))
+                        axesVals=[dirs, ants, times],vals=vals, weights=np.ones_like(vals), weightDtype='f64')
     
 
     def add_freq_dep_tab(self, name, times, freqs, pols = None, ants = None, dirs = None, vals=None):
@@ -337,12 +337,12 @@ class DataPack(object):
                 if vals is None:
                     vals = np.zeros([Npol,Nd,Na,Nf,Nt])
                 self._solset.makeSoltab(name, axesNames=['pol','dir','ant','freq','time'],
-                        axesVals=[pols, dirs, ants, freqs, times],vals=vals, weights=np.ones_like(vals))
+                        axesVals=[pols, dirs, ants, freqs, times],vals=vals, weights=np.ones_like(vals), weightDtype='f64')
             else:
                 if vals is None:
                     vals = np.zeros([Nd,Na,Nf,Nt])
                 self._solset.makeSoltab(name, axesNames=['dir','ant','freq','time'],
-                        axesVals=[dirs, ants, freqs, times],vals=vals, weights=np.ones_like(vals))
+                        axesVals=[dirs, ants, freqs, times],vals=vals, weights=np.ones_like(vals), weightDtype='f64')
 
     @property
     def allowed_soltabs(self):
