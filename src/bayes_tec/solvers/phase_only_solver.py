@@ -44,6 +44,7 @@ class PhaseOnlySolver(Solver):
         Final things to run after a solve, such as plotting
         """
         with datapack:
+            datapack.switch_solset(self.solset)
             axes = datapack.axes_phase
             _, freqs = datapack.get_freqs(axes['freq'])
             eval_freq = freqs[len(freqs)>>1]
@@ -240,6 +241,7 @@ class PhaseOnlySolver(Solver):
 
             kern = mk.SeparateMixedMok([self._build_kernel(**priors) for _ in range(L)], W)
             kern.W.set_trainable(True)
+            tf.summary.image('W',kern.W.constrained_tensor[None,:,:,None])
             feature = mf.MixedKernelSeparateMof([InducingPoints(Z) for _ in range(L)])
             mean = Zero()
             model = HeteroscedasticPhaseOnlySVGP(Y_var, freqs, X, Y, kern, likelihood, 
