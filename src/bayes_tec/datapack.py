@@ -46,6 +46,7 @@ class DataPack(object):
             if not self.is_solset(solset):
                 logging.warning("{} not a valid solset to delete".format(solset))
                 return
+#            self.H.getSolset(solset).obj._f_rename('trash',overwrite=True)
             self.H.getSolset(solset).delete()
 
     def is_soltab(self, soltab):
@@ -199,6 +200,8 @@ class DataPack(object):
             for lab,p in zip(patch_names,directions):
                 if lab not in sourceTable.cols.name[:].astype(type(lab)):
                     sourceTable.append([(lab,p)])
+                else:
+                    logging.info("{} already in source list {}".format(lab, sourceTable.cols.name[:].astype(type(lab))))
 
     @property
     def _antennas(self):
@@ -236,7 +239,8 @@ class DataPack(object):
                 ant_idx = slice(None)
             else:
                 ants = np.array(ants).astype(antenna_labels.dtype)
-                ant_idx = np.searchsorted(antenna_labels, ants)
+                sorter = np.argsort(ants)
+                ant_idx = np.searchsorted(ants, antenna_labels, sorter=sorter)
             antennas = antennas[ant_idx]
             return antenna_labels[ant_idx], ac.SkyCoord(antennas[:,0]*au.m,antennas[:,1]*au.m,antennas[:,2]*au.m,frame='itrs')
 
@@ -258,12 +262,12 @@ class DataPack(object):
     def get_sources(self,dirs):
         with self:
             patch_names, directions = self.sources
-            
             if dirs is None:
                 dir_idx = slice(None)
             else:
                 dirs = np.array(dirs).astype(patch_names.dtype)
-                dir_idx = np.searchsorted(patch_names, dirs)
+                sorter = np.argsort(dirs)
+                dir_idx = np.searchsorted(dirs, patch_names, sorter=sorter)
             directions = directions[dir_idx]
             return patch_names[dir_idx], ac.SkyCoord(directions[:,0]*au.rad, directions[:,1]*au.rad,frame='icrs')
     @property
