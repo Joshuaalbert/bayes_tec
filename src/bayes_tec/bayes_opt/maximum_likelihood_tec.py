@@ -131,7 +131,7 @@ def likelihood(tec, phase, tec_conversion, lik_sigma, K = 2):
     
     return -log_prob
 
-def init_population(phase, tec_conversion, max_tec=0.3, lik_sigma=0.3, N=5):
+def init_population(phase, tec_conversion, max_tec=0.3, lik_sigma=0.3, N=5, K=2):
     """
     phase: B, Nf
     N: int num of samples
@@ -148,14 +148,14 @@ def init_population(phase, tec_conversion, max_tec=0.3, lik_sigma=0.3, N=5):
     X_init = tf.cast(tf.linspace(-max_tec, max_tec,N),float_type) # N
     X_init = tf.tile(X_init[:, None, None], tf.concat([tf.constant([1]), tf.shape(phase)[0:1], tf.constant([1])],axis=0))
     #N, B, 1
-    Y_init = tf.map_fn(lambda X: likelihood(X, phase, tec_conversion, lik_sigma), X_init)
+    Y_init = tf.map_fn(lambda X: likelihood(X, phase, tec_conversion, lik_sigma, K=K), X_init)
     return tf.transpose(X_init,(1,0,2)), tf.transpose(Y_init,(1,0,2))
     
     
 BayesOptReturn = namedtuple('BayesOptReturn',['X', 'Y', 'aq', 'fmean', 'fvar'])
 
 def bayes_opt_iter(phase, tec_conversion, X, Y, jitter = 1e-6, num_proposal=100, 
-                   max_tec=0.3,t = 0.5, lik_sigma=0.3, l=0.195):
+                   max_tec=0.3,t = 0.5, lik_sigma=0.3, l=0.195, K=2):
     """
     phase: tensor, B Nf
     X: tensor B N D
@@ -175,13 +175,13 @@ def bayes_opt_iter(phase, tec_conversion, X, Y, jitter = 1e-6, num_proposal=100,
 
     # proposal array
     tec_array = tf.cast(tf.linspace(-max_tec, max_tec, num_proposal), dtype=float_type)
-    grid_size = 2*max_tec/tf.cast((num_proposal-1),dtype=float_type)
-    tec_array += tf.random_uniform(tf.shape(tec_array),tf.constant(0., dtype=float_type), grid_size, dtype=float_type)
     
     lik_log_sigma = tf.zeros(shape=tf.concat([tf.shape(phase)[0:1], tf.constant([1])],axis=0), dtype=float_type)
     lik_sigma = lik_sigma*tf.exp(lik_log_sigma)
 
     Xstar = tf.tile(tec_array[None,:,None], tf.concat([tf.shape(X)[0:1], tf.constant([1, 1])],axis=0))# B, M, D
+    grid_size = 2*max_tec/tf.cast((num_proposal-1),dtype=float_type)
+    Xstar += tf.random_uniform(tf.shape(Xstar),tf.constant(0., dtype=float_type), grid_size, dtype=float_type)
     # standardise Y
     Y_norm = Y - tf.reduce_mean(Y,axis=1, keepdims=True) #B, N, 1
     Y_norm = Y_norm / (tf.sqrt(tf.reduce_mean(tf.square(Y_norm),axis=1,keepdims=True)) + 1e-6)
@@ -200,26 +200,26 @@ def bayes_opt_iter(phase, tec_conversion, X, Y, jitter = 1e-6, num_proposal=100,
     idx_next = tf.argmax(aq, axis=1, name='idx_next')# B,
     Xnext = tf.gather(Xstar[0,:,:],idx_next, axis=0)# B, D
     #get value at next point
-    Ynext = likelihood(Xnext, phase, tec_conversion, lik_sigma)# (B, 1)
+    Ynext = likelihood(Xnext, phase, tec_conversion, lik_sigma, K=K)# (B, 1)
     
     X = tf.concat([X, Xnext[:, None, :]], axis = 1)
     Y = tf.concat([Y, Ynext[:, None, :]], axis = 1)
     
     return BayesOptReturn(X, Y, aq, fmean, fvar)
 
-def solve_ml_tec(phase, freqs, batch_size=1000, max_tec=0.3, num_proposal=100, n_iter = 21, init_pop = 5, t=0.5, verbose=False):
+def solve_ml_tec(phase, freqs, batch_size=1000, max_tec=0.3, num_proposal=100, n_iter = 21, init_pop = 5, t=0.5, verbose=False,K=2):
     tec_conversion = -8.448e9/freqs
     with tf.Session(graph=tf.Graph()) as sess:
         phase_pl = tf.placeholder(float_type)
         tec_conversion_pl = tf.placeholder(float_type)
         t_pl = tf.placeholder(float_type)
 
-        X_init, Y_init = init_population(phase_pl,tec_conversion_pl,N=init_pop)
+        X_init, Y_init = init_population(phase_pl,tec_conversion_pl,N=init_pop,K=K)
         Xcur, Ycur = X_init, Y_init
         X_,Y_,aq_,fmean_,fvar_ = [],[],[],[],[]
         for i in range(n_iter):
             res = bayes_opt_iter(phase_pl, tec_conversion_pl, Xcur, Ycur,
-                                 num_proposal=num_proposal, t = t_pl*(1.  + ((0.01 - t_pl)/float(n_iter)) * i), max_tec = max_tec)
+                                 num_proposal=num_proposal, t = t_pl*(1.  + ((0.01 - t_pl)/float(n_iter)) * i), max_tec = max_tec,K=K)
             X_.append(res.X)
             Y_.append(res.Y)
             aq_.append(res.aq)

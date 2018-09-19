@@ -15,21 +15,18 @@ def run_solve(flags):
         pol_labels, pols = datapack.get_pols(axes['pol'])
         datapack.delete_soltab('tec')
         datapack.add_freq_indep_tab('tec', times.mjd*86400., pols = pol_labels)
-        tec, axes = datapack.tec
 
         datapack.select(ant=flags.ant_sel, dir=flags.dir_sel, pol=flags.pol_sel, time=flags.time_sel, freq=flags.freq_sel)
-        tec, axes = datapack.tec
 
 
         phase,axes = datapack.phase
-        timestamps, times = datapack.get_times(axes['time'])
-        pol_labels, pols = datapack.get_pols(axes['pol'])
         _, freqs = datapack.get_freqs(axes['freq'])
 
         Npol, Nd, Na, Nf, Nt = phase.shape
         phase = phase.transpose((0,1,2,4,3))
         phase = phase.reshape((-1, Nf))
-        tec_ml, sigma_ml = solve_ml_tec(phase, freqs, batch_size=flags.batch_size,max_tec=flags.max_tec, n_iter=flags.n_iter, t=flags.t,num_proposal=flags.num_proposal, verbose=True)
+    tec_ml, sigma_ml = solve_ml_tec(phase, freqs, batch_size=flags.batch_size,max_tec=flags.max_tec, n_iter=flags.n_iter, t=flags.t,num_proposal=flags.num_proposal, verbose=True)
+    with datapack:
         tec_ml = tec_ml.reshape((Npol, Nd, Na, Nt))
         sigma_ml = sigma_ml.reshape((Npol, Nd, Na, Nt))
         datapack.tec = tec_ml

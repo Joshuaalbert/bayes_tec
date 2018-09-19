@@ -17,7 +17,7 @@ import matplotlib
 #matplotlib.use('Agg')
 import time
 from scipy.spatial.distance import pdist
-
+import psutil
 
 try:
     import cmocean
@@ -126,7 +126,7 @@ class DatapackPlotter(object):
                 ax.text(x[0]+0.05*dx,y[-1]-0.05*dy,title,ha='left',va='top',backgroundcolor=(1.,1.,1., 0.5))
         return ax, img
 
-    def plot(self, ant_sel=None,time_sel=None,freq_sel=None,dir_sel=None,pol_sel=None, fignames=None, vmin=None,vmax=None,mode='perantenna',observable='phase',phase_wrap=True, log_scale=False, plot_crosses=True,plot_facet_idx=False,plot_patchnames=False,labels_in_radec=False,show=False, plot_arrays=False, solset=None, plot_screen=False, **kwargs):
+    def plot(self, ant_sel=None,time_sel=None,freq_sel=None,dir_sel=None,pol_sel=None, fignames=None, vmin=None,vmax=None,mode='perantenna',observable='phase',phase_wrap=True, log_scale=False, plot_crosses=True,plot_facet_idx=False,plot_patchnames=False,labels_in_radec=False,show=False, plot_arrays=False, solset=None, plot_screen=False, tec_eval_freq=None, **kwargs):
         """
         Plot datapack with given parameters.
         """
@@ -173,8 +173,8 @@ class DatapackPlotter(object):
                 obs = obs[:,:,None,:]
                 freq_labels, freqs = [""],[None]
 
-            
-
+            if tec_eval_freq is not None:
+                obs = obs*-8.4480e9/tec_eval_freq
         
             if phase_wrap:
                 obs = np.angle(np.exp(1j*obs))
@@ -187,6 +187,7 @@ class DatapackPlotter(object):
                 cmap = plt.cm.bone
             if log_scale:
                 obs = np.log10(obs)
+
 
             Na = len(antennas)
             Nt = len(times)
@@ -324,11 +325,14 @@ def animate_datapack(datapack,output_folder,num_processes,**kwargs):
     except:
         pass
 
+    if num_processes is None: 
+       num_processes = psutil.cpu_count()
+
     if isinstance(datapack,DataPack):
         datapack = datapack.filename
 
-    with DataPack(datapack) as datapack_fix:
-        datapack_fix.add_antennas(DataPack.lofar_array)
+#    with DataPack(datapack) as datapack_fix:
+#        datapack_fix.add_antennas(DataPack.lofar_array)
 
     args = []
     for i in range(num_processes):
@@ -448,7 +452,6 @@ def plot_data_vs_solution(datapack,output_folder, data_solset='sol000', solution
                         # Solution
                         phase = phases[1]
                         std = stds[1]
-                        print(std)
                         label = "Solution: {}".format(solution_solset)
                         ax.fill_between(times.mjd,phase[p,d,a,f,:]-2*std[p,d,a,f,:],phase[p,d,a,f,:]+2*std[p,d,a,f,:],alpha=0.5,label=r'$\pm2\hat{\sigma}_\phi$')#,color='blue')
                         ax.plot(times.mjd,phase[p,d,a,f,:],label=label)
@@ -458,6 +461,69 @@ def plot_data_vs_solution(datapack,output_folder, data_solset='sol000', solution
                         ax.legend()
                         filename = "{}_v_{}_{}_{}_{}_{}MHz.png".format(data_solset,solution_solset, axes['ant'][a], axes['dir'][d], axes['pol'][p], axes['freq'][f]/1e6 )
                         plt.savefig(os.path.join(output_folder,filename))
+
+
+def plot_freq_vs_time(datapack,output_folder, solset='sol000', soltab='phase', phase_wrap=True,log_scale=False,
+        ant_sel=None,time_sel=None,dir_sel=None,freq_sel=None,pol_sel=None):
+    with DataPack(datapack, readonly=True) as datapack:
+        datapack.switch_solset(solset)
+        datapack.select(ant=ant_sel,time=time_sel,dir=dir_sel,freq=freq_sel,pol=pol_sel)
+        obs, axes = datapack.__getattr__(soltab)
+        if soltab.startswith('weights_'):
+            obs = np.sqrt(np.abs(1./obs)) #uncert from weights = 1/var
+            phase_wrap=False
+        if 'pol' in axes.keys():
+            # plot only first pol selected
+            obs = obs[0,...]
+
+        #obs is dir, ant, freq, time
+        antenna_labels, antennas = datapack.get_antennas(axes['ant'])
+        patch_names, directions = datapack.get_sources(axes['dir'])
+        timestamps, times = datapack.get_times(axes['time'])
+        freq_labels, freqs = datapack.get_freqs(axes['freq'])
+
+        
+
+    
+        if phase_wrap:
+            obs = np.angle(np.exp(1j*obs))
+            vmin = -np.pi
+            vmax = np.pi
+            cmap = phase_cmap
+        else:
+            vmin = vmin or np.percentile(obs.flatten(),1)
+            vmax = vmax or np.percentile(obs.flatten(),99)
+            cmap = plt.cm.bone
+        if log_scale:
+            obs = np.log10(obs)
+
+        Na = len(antennas)
+        Nt = len(times)
+        Nd = len(directions)
+        Nf = len(freqs)
+
+        M = int(np.ceil(np.sqrt(Na)))
+
+        output_folder = os.path.abspath(output_folder)
+        os.makedirs(output_folder, exist_ok=True)
+        for k in range(Nd):
+            filename = os.path.join(os.path.abspath(output_folder),"{}_{}_dir_{}.png".format(solset,soltab,k))
+            logging.info("Plotting {}".format(filename))
+            fig, axs = plt.subplots(nrows=M, ncols=M, figsize=(4*M,4*M),sharex=True,sharey=True)
+            for i in range(M):
+
+                for j in range(M):
+                    l = j + M*i
+                    if l >= Na:
+                        continue
+                    im = axs[i][j].imshow(obs[k,l,:,:],origin='lower',cmap=cmap, aspect='auto',vmin=vmin,vmax=vmax,extent=(times[0].mjd*86400.,times[-1].mjd*86400.,freqs[0],freqs[1]))
+            plt.tight_layout()
+            fig.subplots_adjust(right=0.8)
+            cbar_ax = fig.add_axes([0.85,0.15,0.05, 0.7])
+            fig.colorbar(im,cax=cbar_ax)
+            plt.savefig(filename)
+            plt.close('all')
+
 
 
 def test_vornoi():

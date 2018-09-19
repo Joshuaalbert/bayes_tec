@@ -15,34 +15,6 @@ from concurrent import futures
 from tensorflow.python import debug as tf_debug
 
 
-def _parallel_coord_transform(array_center,time, time0, directions, screen_directions, antennas):
-    enu = ENU(location=array_center, obstime=time)
-    enu_dirs = directions.transform_to(enu)
-    enu_ants = antennas.transform_to(enu)
-    east = enu_ants.east.to(au.km).value
-    north = enu_ants.north.to(au.km).value
-    up = enu_ants.up.to(au.km).value
-    kz = enu_dirs.up.value
-    ra = directions.ra.rad
-    dec = directions.dec.rad
-    X = make_coord_array(
-            np.stack([kz,ra,dec],axis=-1),
-            np.stack([east,north,up],axis=-1), 
-            np.array([[time.mjd*86400. - time0]]),flat=False)
-    
-    enu_dirs = screen_directions.transform_to(enu)
-    kz = enu_dirs.up.value
-    ra = screen_directions.ra.rad
-    dec = screen_directions.dec.rad
-    X_screen = make_coord_array(
-            np.stack([kz,ra,dec],axis=-1),
-            np.stack([east,north,up],axis=-1), 
-            np.array([[time.mjd*86400. - time0]]),flat=False)
-
-    return X, X_screen
-
-
-
 class Solver(object):
     def __init__(self,run_dir, datapack):
         run_dir = os.path.abspath(run_dir)
@@ -50,15 +22,19 @@ class Solver(object):
         self.run_dir = os.path.join(run_dir,"run_{:03d}".format(self.run_id))
         self.summary_dir = os.path.join(self.run_dir,"summaries")
         self.save_dir = os.path.join(self.run_dir, "checkpoints")
+        self.plot_dir = os.path.join(self.run_dir, "plots")
         os.makedirs(self.run_dir,exist_ok=True)
         os.makedirs(self.summary_dir,exist_ok=True)
         os.makedirs(self.save_dir,exist_ok=True)
+        os.makedirs(self.plot_dir,exist_ok=True)
         if isinstance(datapack,str):
             datapack = DataPack(datapack)
         self.datapack = datapack
 
     def solve(self, load_model=None, **kwargs):
         """Run the solver"""
+        logging.info("Starting solve")
+        logging.info("Preparing data...")
         data_shape, build_params = self._prepare_data(self.datapack, **kwargs)
         
         graph = tf.Graph()
@@ -69,19 +45,27 @@ class Solver(object):
         os.makedirs(summary_folder,exist_ok=True)
         with graph.as_default(), sess.as_default(), \
                 tf.summary.FileWriter(summary_folder, graph) as writer:
+            logging.info("Constructing dataset iterators")
             _, data_tensors = self._train_dataset_iterator(data_shape, sess=sess, **kwargs)
+            logging.info("Building model")
             model = self._build_model(*data_tensors, **build_params, **kwargs)
             if load_model is not None:
+                logging.info("Loading previous model state")
                 self._load_model(model, load_model)
+            else:
+                logging.info("No model to load -> train from scratch")
             # train model
             save_id = len(glob.glob(os.path.join(self.save_dir,"save_*")))
             save_folder = os.path.join(self.save_dir,"save_{:03d}".format(save_id))
             os.makedirs(save_folder,exist_ok=True)
+            logging.info("Starting model training")
             saved_model = self._train_model(model, save_folder, writer, **kwargs)
             
             # TODO break prediction into another call (i.e. not in solve)
+            logging.info("Loading trained model")
             self._load_model(model, saved_model)
             
+            logging.info("Predicting posterior at data coords")
             ystar, varstar = [], []
             for X in self._posterior_coords(self.datapack, screen=False, **kwargs):
                 _ystar, _varstar = self._predict_posterior(model, X)
@@ -89,8 +73,10 @@ class Solver(object):
                 varstar.append(_varstar)
             ystar = np.concatenate(ystar, axis=0)
             varstar = np.concatenate(varstar, axis=0)
+            logging.info("Saving posterior at data coords")
             self._save_posterior(ystar, varstar, self.datapack, data_shape, screen=False, **kwargs)
-
+            
+            logging.info("Predicting posterior over screen")
             ystar, varstar = [], []
             for X in self._posterior_coords(self.datapack, screen=True, **kwargs):
                 _ystar, _varstar = self._predict_posterior(model, X)
@@ -98,80 +84,20 @@ class Solver(object):
                 varstar.append(_varstar)
             ystar = np.concatenate(ystar, axis=0)
             varstar = np.concatenate(varstar, axis=0)
+            logging.info("Saving posterior over screen")
             self._save_posterior(ystar, varstar, self.datapack, data_shape, screen=True, **kwargs)
 
-    def _maybe_fill_coords(self, solset, soltab, datapack, screen_res=30, num_threads = None, recalculate_coords=False, **kwargs):
-        ### TODO this should be not in Solver but specific to the type of solver.
-        # here so that block solver runs simply for now, will need to rearrange
-        # probably will be easiest to have a datapack_prep class that either call
-        with datapack:
-            logging.info("Calculating coordinates")
-            if recalculate_coords:
-                datapack.delete_solset("X_facets")
-                datapack.delete_solset("X_screen")
+            logging.info("Finalize routines")
+            self._finalize(self.datapack, **kwargs)
+            logging.info("Done")
 
+    def _finalize(self, datapack, **kwargs):
+        """
+        Final things to run after a solve, such as plotting
+        """
+        raise NotImplementedError("Must subclass")
 
-            if not datapack.is_solset('X_facets') or not datapack.is_solset("X_screen"):
-                datapack.switch_solset(solset)
-                datapack.select(ant=None,time=None, dir=None, freq=None, pol=None)
-                axes = datapack.__getattr__("axes_{}".format(soltab))
-                
-                antenna_labels, antennas = datapack.get_antennas(axes['ant'])
-                patch_names, directions = datapack.get_sources(axes['dir'])
-                timestamps, times = datapack.get_times(axes['time'])
-                freq_labels, freqs = datapack.get_freqs(axes['freq'])
-                pol_labels, pols = datapack.get_pols(axes['pol'])
-
-                Npol, Nd, Na, Nf, Nt = len(pols), len(directions), len(antennas), len(freqs), len(times)
-                
-                screen_ra = np.linspace(np.min(directions.ra.rad) - 0.25*np.pi/180., 
-                        np.max(directions.ra.rad) + 0.25*np.pi/180., screen_res)
-                screen_dec = np.linspace(max(-90.*np.pi/180.,np.min(directions.dec.rad) - 0.25*np.pi/180.), 
-                        min(90.*np.pi/180.,np.max(directions.dec.rad) + 0.25*np.pi/180.), screen_res)
-                screen_directions = np.stack([m.flatten() \
-                        for m in np.meshgrid(screen_ra, screen_dec, indexing='ij')], axis=1)
-                screen_directions = ac.SkyCoord(screen_directions[:,0]*au.rad,screen_directions[:,1]*au.rad,frame='icrs')
-                Nd_screen = screen_res**2
-
-                ###
-                # fill them out
-                X = np.zeros((Nd,Na,Nt,7),dtype=np.float32)
-                X_screen = np.zeros((Nd_screen,Na,Nt,7),dtype=np.float32)
-                t0 = default_timer()
-                for j,time in enumerate(times):
-                    X[:,:,j:j+1,:],X_screen[:,:,j:j+1,:] = _parallel_coord_transform(datapack.array_center, time, times[0].mjd*86400., directions, screen_directions, antennas)
-                    if (j+1) % (Nt//20) == 0:
-                        time_left = (Nt - j - 1) * (default_timer() - t0)/ (j + 1)
-                        logging.info("{:.2f}% done... {:.2f} seconds left".format(100*(j+1)/Nt, time_left))
-
-                
-                self.datapack.switch_solset("X_facets", 
-                        array_file=DataPack.lofar_array, 
-                        directions = np.stack([directions.ra.rad,directions.dec.rad],axis=1))
-                self.datapack.add_freq_indep_tab('coords', times.mjd*86400., pols = ('kz','ra','dec','east','north','up','time'))
-                self.datapack.coords = X.transpose((3,0,1,2))
-
-                
-                self.datapack.switch_solset("X_screen", 
-                        array_file=DataPack.lofar_array, 
-                        directions = np.stack([screen_directions.ra.rad,screen_directions.dec.rad],axis=1))
-                self.datapack.add_freq_indep_tab('coords', times.mjd*86400., pols = ('kz','ra','dec','east','north','up','time'))
-                self.datapack.coords = X_screen.transpose((3,0,1,2))        
-                
-                self.datapack.delete_solset("screen_sol")
-                self.datapack.switch_solset("screen_sol", 
-                        array_file = DataPack.lofar_array, 
-                        directions = np.stack([screen_directions.ra.rad,screen_directions.dec.rad],axis=1))
-                self.datapack.add_freq_indep_tab('tec', times.mjd*86400., pols = pol_labels)
-                
-                self.datapack.delete_solset("posterior_sol")
-                self.datapack.switch_solset("posterior_sol", 
-                        array_file=DataPack.lofar_array, 
-                        directions = np.stack([directions.ra.rad,directions.dec.rad],axis=1))
-                self.datapack.add_freq_indep_tab('tec', times.mjd*86400., pols = pol_labels)
-
-                datapack.switch_solset(solset)
-
+    
     def _posterior_coords(self, datapack, screen=False, **kwargs):
         """
         generator that yeilds batchs of X coords to do posterior prediction at.

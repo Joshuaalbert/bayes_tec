@@ -117,6 +117,8 @@ def add_args(parser):
 
     optional.add_argument("--num_processes", type=int, default=1,
                       help="Number of parallel plots")
+    optional.add_argument("--tec_eval_freq", type=float, default=None,
+                      help="Freq to eval tec at.")
     optional.add_argument("--output_folder", type=str, default="./figs",
                        help="""The output folder.""")
     optional.add_argument("--observable", type=str, default="phase",
