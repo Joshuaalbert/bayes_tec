@@ -40,7 +40,7 @@ Bayesian model for directional and temporal TEC model for phase-wrapped phase sc
   ``` bash
   python setup.py install
   ```
-3. Run tests
+3. Run tests (broken at the moment)
   ``` bash
   pytest
   ```
