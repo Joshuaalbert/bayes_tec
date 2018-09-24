@@ -31,9 +31,12 @@ class Solver(object):
             datapack = DataPack(datapack)
         self.datapack = datapack
 
-    def solve(self, load_model=None, **kwargs):
+    def solve(self, output_solset='posterior_sol', load_model=None, **kwargs):
         """Run the solver"""
         logging.info("Starting solve")
+        self.outupt_solset = output_solset
+        self.output_screen_solset = "screen_{}".format(output_solset)
+        
         logging.info("Preparing data...")
         data_shape, build_params = self._prepare_data(self.datapack, **kwargs)
         

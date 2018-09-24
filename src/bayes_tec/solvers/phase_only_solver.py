@@ -52,7 +52,7 @@ class PhaseOnlySolver(Solver):
         if plot_level == -1:
             # plot 1D posterior000/tec000 against data
             plot_data_vs_solution(datapack,os.path.join(self.plot_dir,"posterior_phase_1D"), data_solset='sol000', 
-                    solution_solset='posterior_sol', show_prior_uncert=False,
+                    solution_solset=self.output_solset, show_prior_uncert=False,
                            ant_sel=ant_sel,time_sel=time_sel,dir_sel=dir_sel,freq_sel=slice(len(freqs)>>1, (len(freqs)>>1)+1, 1),pol_sel=pol_sel)
 
 
@@ -63,7 +63,7 @@ class PhaseOnlySolver(Solver):
             animate_datapack(datapack,os.path.join(self.plot_dir,"posterior_phase_2D"),None,
                     ant_sel=ant_sel,time_sel=time_sel,freq_sel=freq_sel,pol_sel=pol_sel,dir_sel=dir_sel,
                     plot_crosses=True, labels_in_radec=True, observable='tec',phase_wrap=True,
-                    solset='posterior_sol',tec_eval_freq=eval_freq)
+                    solset=self.output_solset,tec_eval_freq=eval_freq)
         if plot_level == 1:
 
             # plot 2D sol000/phase000 at central freq
@@ -75,7 +75,7 @@ class PhaseOnlySolver(Solver):
             animate_datapack(datapack,os.path.join(self.plot_dir,"posterior_tec_2D"),None,
                     ant_sel=ant_sel,time_sel=time_sel,freq_sel=freq_sel,pol_sel=pol_sel,dir_sel=dir_sel,
                     plot_crosses=True, labels_in_radec=True, observable='tec',phase_wrap=False,
-                    solset='posterior_sol',vmin=-0.03, vmax=0.03)
+                    solset=self.output_solset,vmin=-0.03, vmax=0.03)
             # plot 1D sol000/tec000 against data
             plot_data_vs_solution(datapack,os.path.join(self.plot_dir,"sol000_phase_1D"), data_solset='sol000', 
                     solution_solset='sol000', show_prior_uncert=False,
@@ -93,9 +93,9 @@ class PhaseOnlySolver(Solver):
         """
 
         if screen:
-            X = self._get_soltab_coords('screen_sol','tec', ant_sel=ant_sel, time_sel=time_sel, dir_sel=None, freq_sel=freq_sel, pol_sel=pol_sel, no_freq=True)
+            X = self._get_soltab_coords(self.output_screen_solset,'tec', ant_sel=ant_sel, time_sel=time_sel, dir_sel=None, freq_sel=freq_sel, pol_sel=pol_sel, no_freq=True)
         else:
-            X = self._get_soltab_coords('posterior_sol','tec', ant_sel=ant_sel, time_sel=time_sel, dir_sel=None, freq_sel=freq_sel, pol_sel=pol_sel, no_freq=True)
+            X = self._get_soltab_coords(self.output_solset,'tec', ant_sel=ant_sel, time_sel=time_sel, dir_sel=None, freq_sel=freq_sel, pol_sel=pol_sel, no_freq=True)
         X = X.reshape((-1, X.shape[-1]))
 
         shape = X.shape
@@ -115,10 +115,10 @@ class PhaseOnlySolver(Solver):
         """
         with datapack:
             if screen:
-                datapack.switch_solset("screen_sol")
+                datapack.switch_solset(self.output_screen_solset)
                 datapack.select(ant=ant_sel, time=time_sel, dir=None, freq=freq_sel, pol=pol_sel)
             else:
-                datapack.switch_solset("posterior_sol")
+                datapack.switch_solset(self.output_solset)
                 datapack.select(ant=ant_sel, time=time_sel, dir=None, freq=freq_sel, pol=pol_sel)
 
             axes = datapack.axes_tec
@@ -457,10 +457,10 @@ class PhaseOnlySolver(Solver):
     def _maybe_create_posterior_solsets(self, solset, soltab, screen_res=30, num_threads = None, remake_posterior_solsets=False, **kwargs):
         with self.datapack:
             if remake_posterior_solsets:
-                self.datapack.delete_solset("posterior_sol")
-                self.datapack.delete_solset("screen_sol")
+                self.datapack.delete_solset(self.output_solset)
+                self.datapack.delete_solset(self.output_screen_solset)
 
-            if not self.datapack.is_solset('posterior_sol') or not self.datapack.is_solset("screen_sol"):
+            if not self.datapack.is_solset(self.output_solset) or not self.datapack.is_solset(self.output_screen_solset):
                 logging.info("Creating posterior solsets for facets and {}x{} screen".format(screen_res,screen_res))
 
                 self.datapack.switch_solset(solset)
@@ -484,12 +484,12 @@ class PhaseOnlySolver(Solver):
                 screen_directions = ac.SkyCoord(screen_directions[:,0]*au.rad,screen_directions[:,1]*au.rad,frame='icrs')
                 Nd_screen = screen_res**2
                 
-                self.datapack.switch_solset("posterior_sol", 
+                self.datapack.switch_solset(self.output_solset, 
                         array_file=DataPack.lofar_array, 
                         directions = np.stack([directions.ra.rad,directions.dec.rad],axis=1), patch_names=patch_names)
                 self.datapack.add_freq_indep_tab('tec', times.mjd*86400., pols = pol_labels)   
                 
-                self.datapack.switch_solset("screen_sol", 
+                self.datapack.switch_solset(self.output_screen_solset, 
                         array_file = DataPack.lofar_array, 
                         directions = np.stack([screen_directions.ra.rad,screen_directions.dec.rad],axis=1))
                 self.datapack.add_freq_indep_tab('tec', times.mjd*86400., pols = pol_labels)
