@@ -1,5 +1,5 @@
-import pylab as plt
-plt.style.use('ggplot')
+import matplotlib
+matplotlib.use('Agg')
 import numpy as np
 import os
 from concurrent import futures
@@ -10,14 +10,16 @@ import astropy.coordinates as ac
 import astropy.time as at
 import astropy.units as au
 from scipy.spatial import ConvexHull, cKDTree
-from matplotlib.patches import Polygon, Rectangle
-from matplotlib.collections import PatchCollection
-import matplotlib.colors as colors
-import matplotlib
-#matplotlib.use('Agg')
 import time
 from scipy.spatial.distance import pdist
 import psutil
+import pylab as plt
+plt.style.use('ggplot')
+from matplotlib.patches import Polygon, Rectangle
+from matplotlib.collections import PatchCollection
+import matplotlib.colors as colors
+
+
 
 try:
     import cmocean
@@ -340,6 +342,7 @@ def animate_datapack(datapack,output_folder,num_processes,**kwargs):
     with futures.ProcessPoolExecutor(max_workers=num_processes) as executor:
         jobs = executor.map(_parallel_plot,args)
         results = list(jobs)
+    plt.close('all')
     make_animation(output_folder,prefix='fig',fps=4)
 
 def make_animation(datafolder,prefix='fig',fps=4):
@@ -351,6 +354,10 @@ def make_animation(datafolder,prefix='fig',fps=4):
 
 def plot_phase_vs_time(datapack,output_folder, solsets='sol000',
                        ant_sel=None,time_sel=None,dir_sel=None,freq_sel=None,pol_sel=None):
+
+    if isinstance(datapack,DataPack):
+        datapack = datapack.filename
+
 
     if not isinstance(solsets , (list,tuple)):
         solsets = [solsets]
@@ -395,11 +402,15 @@ def plot_phase_vs_time(datapack,output_folder, solsets='sol000',
                         ax.legend()
                         filename = "{}_{}_{}_{}MHz.png".format(axes['ant'][a], axes['dir'][d], axes['pol'][p], axes['freq'][f]/1e6 )
                         plt.savefig(os.path.join(output_folder,filename))
+        plt.close('all')
 
 def plot_data_vs_solution(datapack,output_folder, data_solset='sol000', solution_solset='posterior_sol', show_prior_uncert=False,
                        ant_sel=None,time_sel=None,dir_sel=None,freq_sel=None,pol_sel=None):
     def _wrap(phi):
         return np.angle(np.exp(1j*phi))
+    if isinstance(datapack,DataPack):
+        datapack = datapack.filename
+
 
     output_folder = os.path.abspath(output_folder)
     os.makedirs(output_folder,exist_ok=True)
@@ -460,11 +471,17 @@ def plot_data_vs_solution(datapack,output_folder, data_solset='sol000', solution
                         ax.set_ylabel('Phase deviation [rad.]')
                         ax.legend()
                         filename = "{}_v_{}_{}_{}_{}_{}MHz.png".format(data_solset,solution_solset, axes['ant'][a], axes['dir'][d], axes['pol'][p], axes['freq'][f]/1e6 )
+                        ax.set_ylim(-np.pi, np.pi)
                         plt.savefig(os.path.join(output_folder,filename))
+        plt.close('all')
 
 
 def plot_freq_vs_time(datapack,output_folder, solset='sol000', soltab='phase', phase_wrap=True,log_scale=False,
         ant_sel=None,time_sel=None,dir_sel=None,freq_sel=None,pol_sel=None):
+
+    if isinstance(datapack,DataPack):
+        datapack = datapack.filename
+
     with DataPack(datapack, readonly=True) as datapack:
         datapack.switch_solset(solset)
         datapack.select(ant=ant_sel,time=time_sel,dir=dir_sel,freq=freq_sel,pol=pol_sel)
@@ -522,7 +539,7 @@ def plot_freq_vs_time(datapack,output_folder, solset='sol000', soltab='phase', p
             cbar_ax = fig.add_axes([0.85,0.15,0.05, 0.7])
             fig.colorbar(im,cax=cbar_ax)
             plt.savefig(filename)
-            plt.close('all')
+        plt.close('all')
 
 
 

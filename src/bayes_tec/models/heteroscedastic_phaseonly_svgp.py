@@ -46,7 +46,7 @@ class HeteroscedasticPhaseOnlySVGP(SVGP):
 
 #        var_exp = var_exp * self.weights
 
-        # re-scale for minibatch sizenum_gauss_hermite_points
+        # re-scale for minibatch size
         scale = tf.cast(self.num_data, settings.float_type) / tf.cast(tf.shape(self.X)[0], settings.float_type)
 
         return tf.reduce_sum(var_exp) * scale - KL

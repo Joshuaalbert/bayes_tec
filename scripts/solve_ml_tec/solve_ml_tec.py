@@ -19,11 +19,11 @@ def run_solve(flags):
         datapack.select(ant=flags.ant_sel, dir=flags.dir_sel, pol=flags.pol_sel, time=flags.time_sel, freq=flags.freq_sel)
 
 
-        phase,axes = datapack.phase
+        phase_,axes = datapack.phase
         _, freqs = datapack.get_freqs(axes['freq'])
 
-        Npol, Nd, Na, Nf, Nt = phase.shape
-        phase = phase.transpose((0,1,2,4,3))
+        Npol, Nd, Na, Nf, Nt = phase_.shape
+        phase = phase_.transpose((0,1,2,4,3))
         phase = phase.reshape((-1, Nf))
     tec_ml, sigma_ml = solve_ml_tec(phase, freqs, batch_size=flags.batch_size,max_tec=flags.max_tec, n_iter=flags.n_iter, t=flags.t,num_proposal=flags.num_proposal, verbose=True)
     with datapack:
@@ -31,7 +31,10 @@ def run_solve(flags):
         sigma_ml = sigma_ml.reshape((Npol, Nd, Na, Nt))
         datapack.tec = tec_ml
         datapack.weights_tec = 1./np.square(sigma_ml)
-        datapack.weight_phase = 1./np.square(sigma_ml[:,:,:,None,:]*-8.4480e9/freqs[:,None])
+        #Npol,Nd, Na, Nf, Nt
+        phase_pred = tec_ml[...,None,:]*(-8.4480e9/freqs[:,None])
+        phase_error = np.abs(phase_-phase_pred)
+        datapack.weight_phase = 1./np.square(phase_error)
 
     
 def add_args(parser):
