@@ -34,7 +34,7 @@ class Solver(object):
     def solve(self, output_solset='posterior_sol', load_model=None, **kwargs):
         """Run the solver"""
         logging.info("Starting solve")
-        self.outupt_solset = output_solset
+        self.output_solset = output_solset
         self.output_screen_solset = "screen_{}".format(output_solset)
         
         logging.info("Preparing data...")

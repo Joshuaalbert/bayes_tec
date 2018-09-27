@@ -541,7 +541,83 @@ def plot_freq_vs_time(datapack,output_folder, solset='sol000', soltab='phase', p
             plt.savefig(filename)
         plt.close('all')
 
+def plot_solution_residuals(datapack, output_folder, data_solset='sol000', solution_solset='posterior_sol', 
+                          ant_sel=None,time_sel=None,dir_sel=None,freq_sel=None,pol_sel=None):
+    def _wrap(phi):
+        return np.angle(np.exp(1j*phi))
+    
+    if not isinstance(datapack,str):
+        datapack = datapack.filename
 
+    output_folder = os.path.abspath(output_folder)
+    os.makedirs(output_folder,exist_ok=True)
+
+    solsets = [data_solset, solution_solset]
+    with DataPack(datapack,readonly=True) as datapack:
+        datapack.switch_solset(data_solset)
+        datapack.select(ant=ant_sel,time=time_sel,dir=dir_sel,freq=freq_sel,pol=pol_sel)
+        
+        phase,axes = datapack.phase
+        timestamps,times = datapack.get_times(axes['time'])
+        antenna_labels, antennas = datapack.get_antennas(axes['ant'])
+        patch_names, directions = datapack.get_sources(axes['dir'])
+        _,freqs = datapack.get_freqs(axes['freq'])
+        pols, _ = datapack.get_pols(axes['pol'])
+        Npol,Nd,Na,Nf,Nt = phase.shape
+
+        datapack.switch_solset(solution_solset)
+        datapack.select(ant=ant_sel,time=time_sel,dir=dir_sel,freq=freq_sel,pol=pol_sel)
+        tec,_ = datapack.tec
+        phase_pred = -8.448e9*tec[...,None,:]/freqs[:,None]
+        
+        res = _wrap(_wrap(phase) - _wrap(phase_pred))
+        cbar = None  
+                
+        for p in range(Npol):
+            for a in range(Na):
+                
+                M = int(np.ceil(np.sqrt(Nd)))
+                fig,axs = plt.subplots(nrows=2*M,ncols=M,sharex=True,figsize=(M*4,1*M*4),gridspec_kw = {'height_ratios':[1.5,1]*M})
+                fig.subplots_adjust(wspace=0., hspace=0.)
+                fig.subplots_adjust(right=0.85)
+                cbar_ax = fig.add_axes([0.875, 0.15, 0.025, 0.7])
+                
+                vmin = -1.
+                vmax = 1.
+                norm = plt.Normalize(vmin, vmax)
+                
+                for row in range(0,2*M,2):
+                    for col in range(M):
+                        ax1 = axs[row][col]
+                        ax2 = axs[row+1][col]
+                        
+                        d = col + row//2*M
+                        if d >= Nd:
+                            continue
+
+                        img = ax1.imshow(res[p,d,a,:,:],origin='lower',aspect='auto',
+                                  extent=(times[0].mjd*86400.,times[-1].mjd*86400.,freqs[0],freqs[-1]),
+                                 cmap=plt.cm.jet, norm = norm)
+                        ax1.text(0.05, 0.95, axes['dir'][d], horizontalalignment='left',verticalalignment='top', transform=ax1.transAxes,backgroundcolor=(1.,1.,1., 0.5))
+                    
+                        ax1.set_ylabel('frequency [Hz]')
+                        ax1.legend()
+                    
+
+                        mean = res[p,d,a,:,:].mean(0)
+                        ax2.plot(times.mjd*86400, mean,label=r'$\mathbb{E}_\nu[\delta\phi]$')
+                        std = res[p,d,a,:,:].std(0)
+                        ax2.fill_between(times.mjd*86400, mean - std, mean + std,alpha=0.5,label=r'$\pm\sigma_{\delta\phi}$')
+                        ax2.set_xlabel('Time [mjs]')
+                        ax2.set_xlim(times[0].mjd*86400.,times[-1].mjd*86400.)
+                        ax2.set_ylim(-np.pi,np.pi)
+#                         ax2.legend()
+                        
+                    
+                fig.colorbar(img, cax=cbar_ax, orientation='vertical', label='phase dev. [rad]')
+                filename = "{}_v_{}_{}_{}.png".format(data_solset,solution_solset, axes['ant'][a], axes['pol'][p])
+                plt.savefig(os.path.join(output_folder,filename))
+                plt.close('all')
 
 def test_vornoi():
     from scipy.spatial import Voronoi, voronoi_plot_2d

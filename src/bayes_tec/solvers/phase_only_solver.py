@@ -33,7 +33,7 @@ import tensorflow as tf
 from ..bayes_opt.maximum_likelihood_tec import solve_ml_tec
 from timeit import default_timer
 from ..bayes_opt.maximum_likelihood_tec import solve_ml_tec
-from ..plotting.plot_datapack import animate_datapack, plot_data_vs_solution, plot_freq_vs_time
+from ..plotting.plot_datapack import animate_datapack, plot_data_vs_solution, plot_freq_vs_time,plot_solution_residuals
 
 class PhaseOnlySolver(Solver):
     def __init__(self,run_dir, datapack):
@@ -54,6 +54,9 @@ class PhaseOnlySolver(Solver):
             plot_data_vs_solution(datapack,os.path.join(self.plot_dir,"posterior_phase_1D"), data_solset='sol000', 
                     solution_solset=self.output_solset, show_prior_uncert=False,
                            ant_sel=ant_sel,time_sel=time_sel,dir_sel=dir_sel,freq_sel=slice(len(freqs)>>1, (len(freqs)>>1)+1, 1),pol_sel=pol_sel)
+            
+            plot_solution_residuals(datapack, os.path.join(self.plot_dir,"posterior_phase_residuals"), data_solset='sol000', solution_solset =self.output_solset, 
+                    ant_sel=ant_sel,time_sel=time_sel,dir_sel=dir_sel,freq_sel=freq_sel,pol_sel=pol_sel)
 
 
         if plot_level == 0:
@@ -183,7 +186,7 @@ class PhaseOnlySolver(Solver):
             for name, value in vars.items():
                 f[name] = value
 
-    def _build_kernel(self, kern_dir_ls=0.3, kern_time_ls=50., kern_var=1., **priors):
+    def _build_kernel(self, kern_dir_ls=0.3, kern_time_ls=50., kern_var=1., include_time=True, include_dir=True, **priors):
 
         kern_var = 1. if kern_var == 0. else kern_var
 
@@ -193,19 +196,33 @@ class PhaseOnlySolver(Solver):
         kern_dir.lengthscales = kern_dir_ls
         kern_dir_ls = log_normal_solve(kern_dir_ls, 0.5*kern_dir_ls)
         kern_dir.lengthscales.prior = LogNormal(kern_dir_ls[0], kern_dir_ls[1]**2)
-        kern_dir.lengthscales.trainable = True
+        kern_dir.lengthscales.trainable = False#True
 
         kern_time = Matern32(1,active_dims=slice(2,3,1))
         
         kern_time.variance = kern_var
         kern_var = log_normal_solve(kern_var,0.5*kern_var)
         kern_time.variance.prior = LogNormal(kern_var[0], kern_var[1]**2)
-        kern_time.variance.trainable = True
+        kern_time.variance.trainable = False#True
 
         kern_time.lengthscales = kern_time_ls
         kern_time_ls = log_normal_solve(kern_time_ls, 0.5*kern_time_ls)
         kern_time.lengthscales.prior = LogNormal(kern_time_ls[0], kern_time_ls[1]**2)
-        kern_time.lengthscales.trainable = True
+        kern_time.lengthscales.trainable = False#True
+
+        kern_white = gp.kernels.White(3)
+        kern_white.variance = 1.
+        kern_time.variance.trainable = False#True
+
+        if include_time:
+            if include_dir:
+                return kern_dir*kern_time
+            return kern_time
+        else:
+            if include_dir:
+                kern_dir.variance.trainable = True
+                return kern_dir
+            return kern_white
 
         return kern_dir*kern_time
 
@@ -228,7 +245,7 @@ class PhaseOnlySolver(Solver):
             likelihood_var = log_normal_solve((5.*np.pi/180.)**2, 0.5*(5.*np.pi/180.)**2)
             likelihood.variance.prior = LogNormal(likelihood_var[0],likelihood_var[1]**2)
             likelihood.variance.transform = gp.transforms.Rescale(np.pi/180.)(gp.transforms.positive)
-            likelihood.variance.trainable = True
+            likelihood.variance.trainable = False
  
             q_mu = q_mu/tec_scale #M, L
             q_sqrt = q_sqrt/tec_scale# L, M, M
@@ -252,8 +269,11 @@ class PhaseOnlySolver(Solver):
                         whiten = False, 
                         q_mu = q_mu, 
                         q_sqrt = q_sqrt)
+            for feat in feature.feat_list:
+                feat.Z.trainable = False
             model.q_mu.trainable = True
             model.q_sqrt.trainable = True
+#            model.q_sqrt.prior = gp.priors.Gaussian(q_sqrt, 0.005**2)
             model.compile()
             tf.summary.image('W',kern.W.constrained_tensor[None,:,:,None])
             tf.summary.image('q_mu',model.q_mu.constrained_tensor[None,:,:,None])
@@ -390,7 +410,7 @@ class PhaseOnlySolver(Solver):
             Npol, Nd, Na, Nf, Nt = len(pols), len(directions), len(antennas), len(freqs), len(times)
             num_data = Nt*Nd*Nf
             ndim = 3
-            assert dof_ratio > 1., "Shouldn't model data with model dof than data"
+            assert dof_ratio >= 1., "Shouldn't model data with model dof than data"
             M = int(np.ceil(Nt * Nd / dof_ratio))
             P = Npol*Na
             L = Na #each soltab over same coordinates can be 1

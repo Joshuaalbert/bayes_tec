@@ -252,7 +252,7 @@ class WrappedPhaseGaussianEncodedHetero(Likelihood):
 #        dphase = wrap(phase) - wrap(Y) # Ito theorem
 
         log_prob = tf.stack([tf.distributions.Normal(phase + tf.convert_to_tensor(k*2*np.pi,float_type), 
-                                          tf.sqrt(Y_var + self.variance)).log_prob(wrap(Y)) for k in range(-self.K,self.K+1,1)], axis=0)
+                                          tf.sqrt(self.variance)).log_prob(wrap(Y)) for k in range(-self.K,self.K+1,1)], axis=0)
         log_prob = tf.reduce_logsumexp(log_prob, axis=0) #..., P
         return log_prob
 
