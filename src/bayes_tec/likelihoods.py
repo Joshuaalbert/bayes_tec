@@ -6,7 +6,7 @@ from gpflow import transforms
 from gpflow.params import Parameter
 from gpflow.likelihoods import Likelihood
 from gpflow import settings
-from gpflow.quadrature import ndiagquad
+from gpflow.quadrature import ndiagquad, ndiag_mc, mvnquad, mvn_mc
 
 float_type = settings.float_type
 
@@ -15,13 +15,15 @@ try:
     def _wrap_grad(op,grad):
         phi = op.inputs[0]
         return tf.ones_like(phi)*grad
+
+    def wrap(phi):
+        out = tf.atan2(tf.sin(phi),tf.cos(phi))
+        with tf.get_default_graph().gradient_override_map({'Identity': 'WrapGrad'}):
+            return tf.identity(out)
+
 except:
     pass#already defined
 
-def wrap(phi):
-    out = tf.atan2(tf.sin(phi),tf.cos(phi))
-    with tf.get_default_graph().gradient_override_map({'Identity': 'WrapGrad'}):
-        return tf.identity(out)
 
 
 class WrappedPhaseGaussianEncoded(Likelihood):
@@ -227,13 +229,14 @@ class WrappedPhaseGaussianMulti(Likelihood):
 class WrappedPhaseGaussianEncodedHetero(Likelihood):
     """This is an efficient version of the encoded likelihood."""
     
-    def __init__(self, tec_scale=0.001, num_gauss_hermite_points=20, variance=1.0, K=2, name=None):
+    def __init__(self, tec_scale=0.001, num_gauss_hermite_points=20, num_mc_samples=1, variance=1.0, K=2, name=None):
         super().__init__(name=name)
         self.K = K
         self.variance = Parameter(
             variance, transform=transforms.positive, dtype=settings.float_type)
         self.tec_scale = tec_scale
         self.num_gauss_hermite_points = num_gauss_hermite_points
+        self.num_mc_samples = num_mc_samples
         self.tec_conversion = tf.convert_to_tensor(tec_scale * -8.4480e9,dtype=settings.float_type,name='tec_conversion') # rad Hz/ tecu
         
     @params_as_tensors
@@ -252,7 +255,7 @@ class WrappedPhaseGaussianEncodedHetero(Likelihood):
 #        dphase = wrap(phase) - wrap(Y) # Ito theorem
 
         log_prob = tf.stack([tf.distributions.Normal(phase + tf.convert_to_tensor(k*2*np.pi,float_type), 
-                                          tf.sqrt(self.variance)).log_prob(wrap(Y)) for k in range(-self.K,self.K+1,1)], axis=0)
+                                          tf.sqrt(Y_var)).log_prob(wrap(Y)) for k in range(-self.K,self.K+1,1)], axis=0)
         log_prob = tf.reduce_logsumexp(log_prob, axis=0) #..., P
         return log_prob
 
@@ -307,7 +310,7 @@ class WrappedPhaseGaussianEncodedHetero(Likelihood):
                          self.num_gauss_hermite_points,
                          Fmu, Fvar, logspace=True, Y=Y, Y_var=Y_var, freq=freq)
 
-    def variational_expectations(self, Fmu, Fvar, Y, Y_var, freq):
+    def variational_expectations(self, Fmu, Fvar, Y, Y_var, freq, mc=False, mvn=False):
         r"""
         Compute the expected log density of the data, given a Gaussian
         distribution for the function values.
@@ -320,8 +323,42 @@ class WrappedPhaseGaussianEncodedHetero(Likelihood):
         Here, we implement a default Gauss-Hermite quadrature routine, but some
         likelihoods (Gaussian, Poisson) will implement specific cases.
         """
-        return ndiagquad(self.logp,
-                         self.num_gauss_hermite_points,
-                         Fmu, Fvar, Y=Y, Y_var=Y_var, freq=freq)
+        if mvn:
+            assert len(Fvar.shape) == 3
+
+        if not mvn:
+            if not mc:
+                return ndiagquad(self.logp,
+                                 self.num_gauss_hermite_points,
+                                 Fmu, Fvar, Y=Y, Y_var=Y_var, freq=freq)
+            else:
+                return ndiag_mc(self.logp, self.num_mc_samples , Fmu, Fvar, Y=Y, Y_var=Y_var, freq=freq)
+        else:
+            if not mc:
+                raise ValueError("Too slow to do this")
+            else:
+                return mvn_mc(self.logp, self.num_mc_samples , Fmu, Fvar, Y=Y, Y_var=Y_var, freq=freq)
 
 
+class GaussianTecHetero(Likelihood):
+    def __init__(self, tec_scale=0.005,  **kwargs):
+        super().__init__(**kwargs)
+        self.tec_scale = tf.convert_to_tensor(tec_scale, dtype=float_type)
+
+    @params_as_tensors
+    def logp(self, F, Y, Y_var):
+        tec = F*self.tec_scale
+        return logdensities.gaussian(Y, tec, Y_var)
+
+    @params_as_tensors
+    def predict_mean_and_var(self, Fmu, Fvar, Y_var):
+        return tf.identity(Fmu)*self.tec_scale, Fvar*self.tec_scale**2 + Y_var
+
+    @params_as_tensors
+    def predict_density(self, Fmu, Fvar, Y, Y_var):
+        return logdensities.gaussian(Y, Fmu*self.tec_scale, Fvar*self.tec_scale**2 + Y_var)
+
+    @params_as_tensors
+    def variational_expectations(self, Fmu, Fvar, Y, Y_var):
+        return -0.5 * np.log(2 * np.pi) - 0.5 * tf.log(Y_var) \
+               - 0.5 * (tf.square(Y - Fmu*self.tec_scale) + Fvar*self.tec_scale**2) / Y_var

@@ -17,7 +17,7 @@ import uuid
 import h5py
 from ..utils.stat_utils import log_normal_solve
 from ..utils.gpflow_utils import train_with_adam, SendSummary, SaveModel, Reshape, MatrixSquare
-from ..likelihoods import WrappedPhaseGaussianEncodedHetero
+from ..likelihoods import GaussianTecHetero
 from ..kernels import ThinLayer
 from ..frames import ENU
 from ..models.heteroscedastic_phaseonly_svgp import HeteroscedasticPhaseOnlySVGP
@@ -35,9 +35,10 @@ from timeit import default_timer
 from ..bayes_opt.maximum_likelihood_tec import solve_ml_tec
 from ..plotting.plot_datapack import animate_datapack, plot_data_vs_solution, plot_freq_vs_time,plot_solution_residuals
 
-class PhaseOnlySolver(Solver):
+class TecSolver(Solver):
     def __init__(self,run_dir, datapack):
-        super(PhaseOnlySolver, self).__init__(run_dir, datapack)
+        super(TecSolver, self).__init__(run_dir, datapack)
+        self.soltab = 'tec'
 
     def _finalize(self, datapack, ant_sel=None, time_sel=None, dir_sel=None, freq_sel=None, pol_sel=None,plot_level=-1,**kwargs):
         """
@@ -240,12 +241,7 @@ class PhaseOnlySolver(Solver):
 
         with gp.defer_build():
             # Define the likelihood
-            likelihood = WrappedPhaseGaussianEncodedHetero(tec_scale=tec_scale, K=2)
-            likelihood.variance = 0.3**2#(5.*np.pi/180.)**2
-            likelihood_var = log_normal_solve((5.*np.pi/180.)**2, 0.5*(5.*np.pi/180.)**2)
-            likelihood.variance.prior = LogNormal(likelihood_var[0],likelihood_var[1]**2)
-            likelihood.variance.transform = gp.transforms.Rescale(np.pi/180.)(gp.transforms.positive)
-            likelihood.variance.trainable = False
+            likelihood = GaussianTecHetero(tec_scale=tec_scale)
  
             q_mu = q_mu/tec_scale #M, L
             q_sqrt = q_sqrt/tec_scale# L, M, M
@@ -270,7 +266,7 @@ class PhaseOnlySolver(Solver):
                         q_mu = q_mu, 
                         q_sqrt = q_sqrt)
             for feat in feature.feat_list:
-                feat.Z.trainable = False
+                feat.Z.trainable = True
             model.q_mu.trainable = True
             model.q_sqrt.trainable = True
 #            model.q_sqrt.prior = gp.priors.Gaussian(q_sqrt, 0.005**2)
@@ -297,14 +293,12 @@ class PhaseOnlySolver(Solver):
             Y = np.stack([Y_[i,...] for i in idx], axis=0)
             Y_var_ = f['/data/Y_var']
             Y_var = np.stack([Y_var_[i,...] for i in idx], axis=0)
-            freqs_ = f['/data/freqs']
-            freqs = np.stack([freqs_[i,...] for i in idx], axis=0)
             X_ = f['/data/X']
             X = np.stack([X_[i,...] for i in idx], axis=0)
 
-        return Y_var.astype(dtype), freqs.astype(dtype), X.astype(dtype), Y.astype(dtype)
+        return Y_var.astype(dtype), X.astype(dtype), Y.astype(dtype)
 
-    def _get_soltab_coords(self, solset, soltab, ant_sel=None, time_sel=None, dir_sel=None, freq_sel=None, pol_sel=None, no_freq=False, **kwargs):
+    def _get_soltab_coords(self, solset, soltab, ant_sel=None, time_sel=None, dir_sel=None, freq_sel=None, pol_sel=None, no_freq=True, **kwargs):
         """
         Returns:
         array data_shape + [ndim]
@@ -349,34 +343,19 @@ class PhaseOnlySolver(Solver):
             self.datapack.switch_solset(solset)
             self.datapack.select(ant=ant_sel,time=time_sel, dir=dir_sel, freq=freq_sel, pol=pol_sel)
 
-            # Npol, Nd, Na, Nf, Nt
-            phase, axes = self.datapack.phase
-
-            antenna_labels, antennas = self.datapack.get_antennas(axes['ant'])
-            patch_names, directions = self.datapack.get_sources(axes['dir'])
-            timestamps, times = self.datapack.get_times(axes['time'])
-            freq_labels, freqs = self.datapack.get_freqs(axes['freq'])
-            pol_labels, pols = self.datapack.get_pols(axes['pol'])
-            Npol, Nd, Na, Nf, Nt = len(pols), len(directions), len(antennas), len(freqs), len(times)
-
-
             # Npol, Nd, Na, Nt
             tec, _ = self.datapack.tec
+            Npol, Nd, Na, Nt = tec.shape
+            weights_tec, _ = self.datapack.weights_tec
+            tec_var = 1./weights_tec
+            tec_var = np.where(~np.isfinite(tec_var), 0.005**2, tec_var)
 
-            # Npol, Nd, Na, Nf, Nt
-            phase_pred = tec[...,None,:]*(-8.4480e9/freqs[:,None])
-            Y_var = np.tile(np.mean(np.square(phase-phase_pred), axis=-2, keepdims=True),(1,1,1,Nf,1))
-#            if not self.datapack.readonly:
-#                self.datapack.weights_phase = 1./Y_var
             
-            freqs = np.tile(freqs[None, None, None, :, None], (Npol, Nd, Na, 1, Nt))
+            # Nd, Nt, Na,Npol
+            Y = tec.transpose((1,3,2,0))
+            Y_var = tec_var.transpose((1,3,2,0))
 
-            # Nd, Nf, Nt, Na,Npol
-            Y = phase.transpose((1,3,4,2,0))
-            Y_var = Y_var.transpose((1,3,4,2,0))
-            freqs = freqs.transpose((1,3,4,2,0))
-
-            return Y, Y_var, freqs
+            return Y, Y_var
 
     
     def _prepare_data(self,datapack,ant_sel=None, time_sel=None, dir_sel=None, freq_sel=None, pol_sel=None,reweight_obs=False, recalculate_coords=False, dof_ratio=40., weight_smooth_len=40, screen_res=30, solset='sol000',coord_file=None, posterior_time_sel = None, **kwargs):
@@ -392,7 +371,7 @@ class PhaseOnlySolver(Solver):
         data_shape, build_params
         """
         self.solset = solset
-        self.soltab = 'phase'
+        self.soltab = 'tec'
         with self.datapack:
             ###
             # calculate the coordinates for the solve (currently [ra, dec, t]) on the whole dataset
@@ -400,16 +379,15 @@ class PhaseOnlySolver(Solver):
             self. _maybe_create_posterior_solsets(self.solset, self.soltab, **kwargs)
             
             self.datapack.switch_solset(solset)                
-            self.datapack.select(ant=ant_sel,time=time_sel, dir=dir_sel, freq=freq_sel, pol=pol_sel)
+            self.datapack.select(ant=ant_sel,time=time_sel, dir=dir_sel, pol=pol_sel)
             axes = self.datapack.__getattr__("axes_{}".format(self.soltab))
             antenna_labels, antennas = self.datapack.get_antennas(axes['ant'])
             patch_names, directions = self.datapack.get_sources(axes['dir'])
             timestamps, times = self.datapack.get_times(axes['time'])
-            freq_labels, freqs = self.datapack.get_freqs(axes['freq'])
             pol_labels, pols = self.datapack.get_pols(axes['pol'])
 
-            Npol, Nd, Na, Nf, Nt = len(pols), len(directions), len(antennas), len(freqs), len(times)
-            num_data = Nt*Nd*Nf
+            Npol, Nd, Na, Nt = len(pols), len(directions), len(antennas),len(times)
+            num_data = Nt*Nd
             ndim = 3
             assert dof_ratio >= 1., "Shouldn't model data with more dof than data"
             M = int(np.ceil(Nt * Nd / dof_ratio))
@@ -428,7 +406,7 @@ class PhaseOnlySolver(Solver):
             #Nd, Nf, Nt, ndim
             X = self._get_soltab_coords(self.solset, self.soltab, ant_sel=ant_sel,time_sel=time_sel, dir_sel=dir_sel, freq_sel=freq_sel, pol_sel=pol_sel)
             #Nd, Nf, Nt, Na, Npol
-            Y, Y_var, freqs = self._get_soltab_data(self.solset, self.soltab, ant_sel=ant_sel,time_sel=time_sel, dir_sel=dir_sel, freq_sel=freq_sel, pol_sel=pol_sel)
+            Y, Y_var = self._get_soltab_data(self.solset, self.soltab, ant_sel=ant_sel,time_sel=time_sel, dir_sel=dir_sel, freq_sel=freq_sel, pol_sel=pol_sel)
 
              ###
             # input coords not thread safe
@@ -440,7 +418,6 @@ class PhaseOnlySolver(Solver):
                 f['/data/X'] = X.reshape((-1, ndim))
                 f['/data/Y'] = Y.reshape((-1, P))
                 f['/data/Y_var'] = Y_var.reshape((-1, P))
-                f['/data/freqs'] = freqs.reshape((-1, P))
 
 
             logging.info("Initializing sparse conditions: q_mu and q_sqrt")
@@ -450,7 +427,7 @@ class PhaseOnlySolver(Solver):
             tec, _ = self.datapack.tec
             tec_weights, _ = self.datapack.weights_tec
             tec_std = np.sqrt(1./tec_weights)
-            tec_std = np.where(~np.isfinite(tec_std), 0.01, tec_std)
+            tec_std = np.where(~np.isfinite(tec_std), 0.005, tec_std)
             #Npol, Nd, Na, Nt -> Nd, Na, Nt -> Nd, Nt, Na -> Nd*Nt, Na
             tec = tec.mean(0).transpose((0,2,1)).reshape((-1, L))
             tec_std = tec_std.max(0).transpose((0,2,1)).reshape((-1,L))
@@ -462,7 +439,7 @@ class PhaseOnlySolver(Solver):
 
             W = np.reshape(np.ones(Npol)[:,None,None]*np.eye(Na)[None, :,:],(P,L))
                         
-            data_shape = (Nd, Nf, Nt)
+            data_shape = (Nd,  Nt)
             build_params = {
                     'Z': Z,
                     'W': W,
@@ -491,10 +468,9 @@ class PhaseOnlySolver(Solver):
                 antenna_labels, antennas = self.datapack.get_antennas(axes['ant'])
                 patch_names, directions = self.datapack.get_sources(axes['dir'])
                 timestamps, times = self.datapack.get_times(axes['time'])
-                freq_labels, freqs = self.datapack.get_freqs(axes['freq'])
                 pol_labels, pols = self.datapack.get_pols(axes['pol'])
 
-                Npol, Nd, Na, Nf, Nt = len(pols), len(directions), len(antennas), len(freqs), len(times)
+                Npol, Nd, Na,  Nt = len(pols), len(directions), len(antennas),  len(times)
                 
                 screen_ra = np.linspace(np.min(directions.ra.rad) - 0.25*np.pi/180., 
                         np.max(directions.ra.rad) + 0.25*np.pi/180., screen_res)
