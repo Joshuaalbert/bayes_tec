@@ -33,7 +33,9 @@ def run_solve(flags):
         datapack.weights_tec = 1./np.square(sigma_ml)
         #Npol,Nd, Na, Nf, Nt
         phase_pred = tec_ml[...,None,:]*(-8.4480e9/freqs[:,None])
-        phase_error = np.abs(phase_-phase_pred)
+        def _wrap(phi):
+            return np.angle(np.exp(1j*phi))
+        phase_error = np.abs(_wrap(_wrap(phase_)-_wrap(phase_pred)))
         datapack.weight_phase = 1./np.square(phase_error)
 
     

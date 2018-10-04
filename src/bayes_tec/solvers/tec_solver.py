@@ -16,11 +16,11 @@ from ..frames import ENU
 import uuid
 import h5py
 from ..utils.stat_utils import log_normal_solve
-from ..utils.gpflow_utils import train_with_adam, SendSummary, SaveModel, Reshape, MatrixSquare
+from ..utils.gpflow_utils import train_with_bfgs, SendSummary, SaveModel, Reshape, MatrixSquare
 from ..likelihoods import GaussianTecHetero
 from ..kernels import ThinLayer
 from ..frames import ENU
-from ..models.heteroscedastic_phaseonly_svgp import HeteroscedasticPhaseOnlySVGP
+from ..models.heteroscedastic_tec_svgp import HeteroscedasticTecSVGP
 from scipy.cluster.vq import kmeans2   
 from gpflow.priors import LogNormal, Gaussian
 from gpflow.mean_functions import Constant, Zero
@@ -160,7 +160,7 @@ class TecSolver(Solver):
         Train the model.
         Returns the saved model.
         """
-        train_with_adam(model, learning_rate, iterations, [SendSummary(model,writer,write_period=10)])#, SaveModel(save_folder, save_period=1000)])
+        train_with_bfgs(model, learning_rate, iterations, [SendSummary(model,writer,write_period=10)])#, SaveModel(save_folder, save_period=1000)])
         save_path = os.path.join(save_folder,'model.hdf5')
         logging.info("Saving model {}".format(save_path))
         self._save_model(model, save_path)
@@ -227,7 +227,7 @@ class TecSolver(Solver):
 
         return kern_dir*kern_time
 
-    def _build_model(self, Y_var, freqs, X, Y, Z=None, q_mu = None, q_sqrt = None, M=None, P=None, L=None, W=None, num_data=None, jitter=1e-6, tec_scale=None, W_diag=False, **kwargs):
+    def _build_model(self, Y_var, X, Y, Z=None, q_mu = None, q_sqrt = None, M=None, P=None, L=None, W=None, num_data=None, jitter=1e-6, tec_scale=None, W_diag=False, **kwargs):
         """
         Build the model from the data.
         X,Y: tensors the X and Y of data
@@ -256,7 +256,7 @@ class TecSolver(Solver):
             
             feature = mf.MixedKernelSeparateMof([InducingPoints(Z) for _ in range(L)])
             mean = Zero()
-            model = HeteroscedasticPhaseOnlySVGP(Y_var, freqs, X, Y, kern, likelihood, 
+            model = HeteroscedasticTecSVGP(Y_var, X, Y, kern, likelihood, 
                         feat = feature,
                         mean_function=mean, 
                         minibatch_size=None,
@@ -403,11 +403,11 @@ class TecSolver(Solver):
             logging.info("Kff: {}x{}x{} [{:.2f} MB]".format(L,minibatch_size,minibatch_size,(8*L*minibatch_size**2)/(1<<20)))
 
                        
-            #Nd, Nf, Nt, ndim
+            #Nd,  Nt, ndim
             X = self._get_soltab_coords(self.solset, self.soltab, ant_sel=ant_sel,time_sel=time_sel, dir_sel=dir_sel, freq_sel=freq_sel, pol_sel=pol_sel)
-            #Nd, Nf, Nt, Na, Npol
+            #Nd,  Nt, Na, Npol
             Y, Y_var = self._get_soltab_data(self.solset, self.soltab, ant_sel=ant_sel,time_sel=time_sel, dir_sel=dir_sel, freq_sel=freq_sel, pol_sel=pol_sel)
-
+            
              ###
             # input coords not thread safe
             self.coord_file = os.path.join(self.run_dir,"data_source_{}.hdf5".format(str(uuid.uuid4())))
@@ -418,6 +418,9 @@ class TecSolver(Solver):
                 f['/data/X'] = X.reshape((-1, ndim))
                 f['/data/Y'] = Y.reshape((-1, P))
                 f['/data/Y_var'] = Y_var.reshape((-1, P))
+            
+            # num of input data tensor iterators (Y_var, X, Y)
+            self.model_input_num = 3
 
 
             logging.info("Initializing sparse conditions: q_mu and q_sqrt")
@@ -433,13 +436,13 @@ class TecSolver(Solver):
             tec_std = tec_std.max(0).transpose((0,2,1)).reshape((-1,L))
 
             idx = np.random.choice(Nd*Nt, size=M, replace=False)
-            Z = X[:,0,:,:].reshape((-1,ndim))[idx,:]#M,D
+            Z = X[:,:,:].reshape((-1,ndim))[idx,:]#M,D
             q_mu = tec[idx,:]#M, Na
             q_sqrt = np.stack([np.diag(tec_std[idx,l]) for l in range(L)],axis=0)#L, M, M
 
             W = np.reshape(np.ones(Npol)[:,None,None]*np.eye(Na)[None, :,:],(P,L))
                         
-            data_shape = (Nd,  Nt)
+            data_shape = (Nd, Nt)
             build_params = {
                     'Z': Z,
                     'W': W,

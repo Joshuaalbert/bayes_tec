@@ -1,28 +1,39 @@
 
 import tensorflow as tf
+import numpy as np
 from gpflow.models import SVGP
 from gpflow.decors import params_as_tensors, autoflow
+from gpflow.priors import LogNormal
 from gpflow import settings
 from gpflow.params import DataHolder
-from gpflow.params import Minibatch
+from gpflow.params import Minibatch, Parameter
+from gpflow.transforms import Logistic
 float_type = settings.float_type
 
 from ..logging import logging
+from ..utils.stat_utils import log_normal_solve
 
 class HeteroscedasticPhaseOnlySVGP(SVGP):
-    def __init__(self,Y_var,freqs,*args, **kwargs):
+    def __init__(self,Y_var,freqs,dir_idx, facet_weights, *args, **kwargs):
         minibatch_size = kwargs.get('minibatch_size',None)
         if minibatch_size is None:
             Y_var = DataHolder(Y_var)
             freqs = DataHolder(freqs)
+            dir_idx = DataHolder(dir_idx)
         else:
             Y_var = Minibatch(Y_var, batch_size=minibatch_size, seed=0)     
             freqs = Minibatch(freqs, batch_size=minibatch_size, seed=0)     
+            dir_idx = Minibatch(dir_idx, batch_size=minibatch_size, seed=0)     
 
         super(HeteroscedasticPhaseOnlySVGP, self).__init__(*args, **kwargs)
 
+#        facet_sigma = log_normal_solve(0.01,1.)
+#        prior = LogNormal(facet_sigma[0],facet_sigma[1]**2)
+        self.facet_weights = Parameter(facet_weights, transform=Logistic(0.,np.pi) , dtype=float_type, trainable=True)
+
         self.Y_var = Y_var
         self.freqs = freqs
+        self.dir_idx = dir_idx
         
     @params_as_tensors
     def _build_likelihood(self):
@@ -40,9 +51,9 @@ class HeteroscedasticPhaseOnlySVGP(SVGP):
 #        cov = self.kern.K(self.X, full_output_cov=False)#P,N,N
 #        tf.summary.image('Kxx',cov[..., None])
 
-
+        weights = tf.gather(tf.square(self.facet_weights), tf.cast(self.dir_idx, tf.int64), axis=0) #mini_batch
         # Get variational expectations.
-        var_exp = self.likelihood.variational_expectations(fmean, fvar, self.Y, self.Y_var, self.freqs, mc=True)
+        var_exp = self.likelihood.variational_expectations(fmean, fvar, self.Y, self.Y_var, self.freqs, mc=False)
 
 #        var_exp = var_exp * self.weights
 

@@ -1,5 +1,5 @@
 from gpflow.actions import Action, Loop
-from gpflow.training import AdamOptimizer
+from gpflow.training import NatGradOptimizer, AdamOptimizer, ScipyOptimizer
 from gpflow import settings
 from gpflow.transforms import Transform
 from ..logging import logging
@@ -97,8 +97,8 @@ def train_with_adam(model, learning_rate, iterations, callback=None):
     with tf.variable_scope("learning_rate"):
         global_step = tf.Variable(0, trainable=False)
         starter_learning_rate = 1e-1
-        decay_steps = int(iterations//5)
-        decay_rate = 1./2.
+        decay_steps = int(iterations//3)
+        decay_rate = 1./3.
         learning_rate = tf.train.exponential_decay(starter_learning_rate,
                                                   tf.assign_add(global_step,1), decay_steps, decay_rate, staircase=True)
     tf.summary.scalar("optimisation/learning_rate",learning_rate)
@@ -119,6 +119,101 @@ def train_with_adam(model, learning_rate, iterations, callback=None):
 
     Loop(actions, stop=iterations)()
     model.anchor(model.enquire_session())
+
+
+def train_with_bfgs(model, learning_rate, iterations, callback=None):
+
+    
+    sess = model.enquire_session()
+    
+    assert isinstance(callback, (tuple,list))
+    for c in callback:
+        c.init()
+    adam = ScipyOptimizer().make_optimize_action(model)
+    actions = [adam]
+    actions = actions if callback is None else actions + callback
+
+    Loop(actions)()
+    model.anchor(model.enquire_session())
+
+
+class GammaSchedule(Action):
+    def __init__(self, op_increment_gamma):
+        self.op_increment_gamma = op_increment_gamma
+
+    def run(self, ctx):
+        ctx.session.run(self.op_increment_gamma)
+
+def train_with_nat_and_adam(model, lr, gamma, iterations, var_list=None, callback=None):
+    # we'll make use of this later when we use a XiTransform
+    if var_list is None:
+        var_list = [[model.q_mu, model.q_sqrt]]
+
+    # we don't want adam optimizing these
+    model.q_mu.set_trainable(False)
+    model.q_sqrt.set_trainable(False)
+
+    with tf.variable_scope("learning_rate"):
+        global_step = tf.Variable(0, trainable=False)
+        starter_learning_rate = 1e-1
+        decay_steps = int(iterations//3)
+        decay_rate = 1./3.
+        learning_rate = tf.train.exponential_decay(starter_learning_rate,
+                                                  tf.assign_add(global_step,1), decay_steps, decay_rate, staircase=True)
+    tf.summary.scalar("optimisation/learning_rate",learning_rate)
+    sess = model.enquire_session()
+    tf_vars = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope='learning_rate')
+    sess.run(tf.variables_initializer(var_list=tf_vars))
+
+    
+    with tf.variable_scope("gamma"):
+        gamma_start = 1e-5
+        gamma_max = tf.cast(1.,tf.float64)
+        mul_step = tf.cast(1.1,tf.float64)
+        add_step = tf.cast(1e-3,tf.float64)
+        gamma = tf.Variable(gamma_start, dtype=tf.float64)
+
+        gamma_ref = tf.identity(gamma)
+        
+
+        gamma_fallback = tf.cast(1e-1, tf.float64)   # we'll reduce by this factor if there's a cholesky failure 
+        op_fallback_gamma = tf.assign(gamma, gamma * gamma_fallback) 
+
+        diff = tf.where(gamma_ref*mul_step < add_step, gamma_ref*mul_step, add_step)
+
+        gamma = tf.assign(gamma, tf.where(gamma_ref + diff > gamma_max, gamma_max, gamma_ref + diff))
+
+    tf.summary.scalar("optimisation/gamma",gamma)
+    sess = model.enquire_session()
+    tf_vars = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope='gamma')
+    sess.run(tf.variables_initializer(var_list=tf_vars))
+
+    natgrad = NatGradOptimizer(gamma).make_optimize_action(model, var_list=var_list)
+    adam = AdamOptimizer(learning_rate).make_optimize_action(model)
+
+    actions = [adam, natgrad]
+    actions = actions if callback is None else actions + callback
+    for c in callback:
+        try:
+            c.init()
+        except:
+            pass
+
+    sess = model.enquire_session()
+    it = 0
+    while it < iterations:
+        try:
+            looper = Loop(actions, start=it, stop=iterations)
+            looper()
+            it = looper.iteration
+        except tf.errors.InvalidArgumentError:
+            it = looper.iteration
+            g = sess.run(gamma_ref)
+            logging.info('gamma = {} on iteration {} is too big! Falling back to {}'.format(g, it, g * sess.run(gamma_fallback)))
+            sess.run(op_fallback_gamma)
+            
+    model.anchor(model.enquire_session())
+
 
 class Reshape(Transform):
     """

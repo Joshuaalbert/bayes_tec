@@ -6,7 +6,8 @@ from gpflow import transforms
 from gpflow.params import Parameter
 from gpflow.likelihoods import Likelihood
 from gpflow import settings
-from gpflow.quadrature import ndiagquad, ndiag_mc, mvnquad, mvn_mc
+from gpflow.quadrature import ndiagquad, ndiag_mc, mvnquad
+from gpflow import logdensities
 
 float_type = settings.float_type
 
@@ -229,7 +230,7 @@ class WrappedPhaseGaussianMulti(Likelihood):
 class WrappedPhaseGaussianEncodedHetero(Likelihood):
     """This is an efficient version of the encoded likelihood."""
     
-    def __init__(self, tec_scale=0.001, num_gauss_hermite_points=20, num_mc_samples=1, variance=1.0, K=2, name=None):
+    def __init__(self, tec_scale=0.005, num_gauss_hermite_points=20, num_mc_samples=1, variance=1.0, K=2, name=None):
         super().__init__(name=name)
         self.K = K
         self.variance = Parameter(
@@ -237,7 +238,7 @@ class WrappedPhaseGaussianEncodedHetero(Likelihood):
         self.tec_scale = tec_scale
         self.num_gauss_hermite_points = num_gauss_hermite_points
         self.num_mc_samples = num_mc_samples
-        self.tec_conversion = tf.convert_to_tensor(tec_scale * -8.4480e9,dtype=settings.float_type,name='tec_conversion') # rad Hz/ tecu
+        self.tec_conversion = tf.convert_to_tensor(tec_scale * -8.4480e9,dtype=settings.float_type, name='tec_conversion') # rad Hz/ tecu
         
     @params_as_tensors
     def logp(self, F, Y, Y_var, freq, **kwargs):
@@ -251,12 +252,13 @@ class WrappedPhaseGaussianEncodedHetero(Likelihood):
         tensor ..., P
         """
         #..., Nf       
-        phase = wrap(self.tec_conversion * (F/freq))
+        phase = self.tec_conversion * (F / freq)
 #        dphase = wrap(phase) - wrap(Y) # Ito theorem
 
         log_prob = tf.stack([tf.distributions.Normal(phase + tf.convert_to_tensor(k*2*np.pi,float_type), 
                                           tf.sqrt(Y_var)).log_prob(wrap(Y)) for k in range(-self.K,self.K+1,1)], axis=0)
         log_prob = tf.reduce_logsumexp(log_prob, axis=0) #..., P
+
         return log_prob
 
         
@@ -362,3 +364,123 @@ class GaussianTecHetero(Likelihood):
     def variational_expectations(self, Fmu, Fvar, Y, Y_var):
         return -0.5 * np.log(2 * np.pi) - 0.5 * tf.log(Y_var) \
                - 0.5 * (tf.square(Y - Fmu*self.tec_scale) + Fvar*self.tec_scale**2) / Y_var
+
+class WrappedPhaseGaussianEncodedHeteroDirectionalOutliers(Likelihood):
+    """This is an efficient version of the encoded likelihood."""
+    
+    def __init__(self,  tec_scale=0.005, num_gauss_hermite_points=20, num_mc_samples=1, variance=1.0, K=2, directional_var_matrix=None, name=None):
+        super().__init__(name=name)
+        self.K = K
+        self.variance = Parameter(
+            variance, transform=transforms.positive, dtype=settings.float_type)
+        assert directionla_var_matrix is not None
+        self.directional_var_matrix = Parameter(directional_var_matrix, transform=transforms.positive, dtype=settings.float_type)
+        self.tec_scale = tec_scale
+        self.num_gauss_hermite_points = num_gauss_hermite_points
+        self.num_mc_samples = num_mc_samples
+        self.tec_conversion = tf.convert_to_tensor(tec_scale * -8.4480e9,dtype=settings.float_type, name='tec_conversion') # rad Hz/ tecu
+        
+    @params_as_tensors
+    def logp(self, F, Y, Y_var, freq, dir_idx, **kwargs):
+        """
+        The log-likelihood function.
+        F is ..., P
+        Y is ..., P
+        Y_var ..., P
+        freq ..., P
+        Returns:
+        tensor ..., P
+        """
+        #..., Nf       
+        phase = wrap(self.tec_conversion * (F / freq))
+#        dphase = wrap(phase) - wrap(Y) # Ito theorem
+
+        dir_var = tf.gather(self.directional_var_matrix, dir_idx)
+
+        log_prob = tf.stack([tf.distributions.Normal(phase + tf.convert_to_tensor(k*2*np.pi,float_type), 
+                                          tf.sqrt(Y_var)).log_prob(wrap(Y)) for k in range(-self.K,self.K+1,1)], axis=0)
+        log_prob = tf.reduce_logsumexp(log_prob, axis=0) #..., P
+
+        return log_prob
+
+        
+    @params_as_tensors
+    def conditional_mean(self, F, freq, **kwargs):  # pylint: disable=R0201
+        """The mean of the likelihood conditioned on latent."""
+        # ..., Nf
+        phase = self.tec_conversion * (F/freq)
+        return phase
+
+    @params_as_tensors
+    def conditional_variance(self, Y_var, **kwargs):
+        return Y_var + self.variance
+
+    def predict_mean_and_var(self, Fmu, Fvar, Y_var, freq):
+        r"""
+        Given a Normal distribution for the latent function,
+        return the mean of Y
+        if
+            q(f) = N(Fmu, Fvar)
+        and this object represents
+            p(y|f)
+        then this method computes the predictive mean
+           \int\int y p(y|f)q(f) df dy
+        and the predictive variance
+           \int\int y^2 p(y|f)q(f) df dy  - [ \int\int y^2 p(y|f)q(f) df dy ]^2
+        Here, we implement a default Gauss-Hermite quadrature routine, but some
+        likelihoods (e.g. Gaussian) will implement specific cases.
+        """
+        integrand2 = lambda *X, **kwargs: self.conditional_variance(*X, **kwargs) + tf.square(self.conditional_mean(*X, **kwargs))
+        E_y, E_y2 = ndiagquad([self.conditional_mean, integrand2],
+                              self.num_gauss_hermite_points,
+                              Fmu, Fvar, Y_var=Y_var, freq=freq)
+        V_y = E_y2 - tf.square(E_y)
+        return E_y, V_y
+
+    def predict_density(self, Fmu, Fvar, Y, Y_var, freq):
+        r"""
+        Given a Normal distribution for the latent function, and a datum Y,
+        compute the log predictive density of Y.
+        i.e. if
+            q(f) = N(Fmu, Fvar)
+        and this object represents
+            p(y|f)
+        then this method computes the predictive density
+            \log \int p(y=Y|f)q(f) df
+        Here, we implement a default Gauss-Hermite quadrature routine, but some
+        likelihoods (Gaussian, Poisson) will implement specific cases.
+        """
+        return ndiagquad(self.logp,
+                         self.num_gauss_hermite_points,
+                         Fmu, Fvar, logspace=True, Y=Y, Y_var=Y_var, freq=freq)
+
+    def variational_expectations(self, Fmu, Fvar, Y, Y_var, freq, mc=False, mvn=False):
+        r"""
+        Compute the expected log density of the data, given a Gaussian
+        distribution for the function values.
+        if
+            q(f) = N(Fmu, Fvar)
+        and this object represents
+            p(y|f)
+        then this method computes
+           \int (\log p(y|f)) q(f) df.
+        Here, we implement a default Gauss-Hermite quadrature routine, but some
+        likelihoods (Gaussian, Poisson) will implement specific cases.
+        """
+        if mvn:
+            assert len(Fvar.shape) == 3
+
+        if not mvn:
+            if not mc:
+                return ndiagquad(self.logp,
+                                 self.num_gauss_hermite_points,
+                                 Fmu, Fvar, Y=Y, Y_var=Y_var, freq=freq)
+            else:
+                return ndiag_mc(self.logp, self.num_mc_samples , Fmu, Fvar, Y=Y, Y_var=Y_var, freq=freq)
+        else:
+            if not mc:
+                raise ValueError("Too slow to do this")
+            else:
+                return mvn_mc(self.logp, self.num_mc_samples , Fmu, Fvar, Y=Y, Y_var=Y_var, freq=freq)
+
+

@@ -16,7 +16,7 @@ from ..frames import ENU
 import uuid
 import h5py
 from ..utils.stat_utils import log_normal_solve
-from ..utils.gpflow_utils import train_with_adam, SendSummary, SaveModel, Reshape, MatrixSquare
+from ..utils.gpflow_utils import train_with_nat_and_adam, train_with_adam, SendSummary, SaveModel, Reshape, MatrixSquare
 from ..likelihoods import WrappedPhaseGaussianEncodedHetero
 from ..kernels import ThinLayer
 from ..frames import ENU
@@ -24,7 +24,7 @@ from ..models.heteroscedastic_phaseonly_svgp import HeteroscedasticPhaseOnlySVGP
 from scipy.cluster.vq import kmeans2   
 from gpflow.priors import LogNormal, Gaussian
 from gpflow.mean_functions import Constant, Zero
-from gpflow.kernels import Matern52, Matern32, White
+from gpflow.kernels import Matern52, Matern32, White, RBF
 from gpflow.features import InducingPoints
 from gpflow import defer_build
 import gpflow.multioutput.kernels as mk
@@ -51,12 +51,15 @@ class PhaseOnlySolver(Solver):
 
         if plot_level == -1:
             # plot 1D posterior000/tec000 against data
-            plot_data_vs_solution(datapack,os.path.join(self.plot_dir,"posterior_phase_1D"), data_solset='sol000', 
-                    solution_solset=self.output_solset, show_prior_uncert=False,
-                           ant_sel=ant_sel,time_sel=time_sel,dir_sel=dir_sel,freq_sel=slice(len(freqs)>>1, (len(freqs)>>1)+1, 1),pol_sel=pol_sel)
+#            plot_data_vs_solution(datapack,os.path.join(self.plot_dir,"posterior_phase_1D"), data_solset='sol000', 
+#                    solution_solset=self.output_solset, show_prior_uncert=False,
+#                           ant_sel=ant_sel,time_sel=time_sel,dir_sel=dir_sel,freq_sel=slice(len(freqs)>>1, (len(freqs)>>1)+1, 1),pol_sel=pol_sel)
             
             plot_solution_residuals(datapack, os.path.join(self.plot_dir,"posterior_phase_residuals"), data_solset='sol000', solution_solset =self.output_solset, 
                     ant_sel=ant_sel,time_sel=time_sel,dir_sel=dir_sel,freq_sel=freq_sel,pol_sel=pol_sel)
+#            plot_solution_residuals(datapack, os.path.join(self.plot_dir,"sol000_phase_residuals"), data_solset='sol000', solution_solset = self.solset, 
+#                    ant_sel=ant_sel,time_sel=time_sel,dir_sel=dir_sel,freq_sel=freq_sel,pol_sel=pol_sel)
+
 
 
         if plot_level == 0:
@@ -159,7 +162,8 @@ class PhaseOnlySolver(Solver):
         Train the model.
         Returns the saved model.
         """
-        train_with_adam(model, learning_rate, iterations, [SendSummary(model,writer,write_period=10)])#, SaveModel(save_folder, save_period=1000)])
+#        train_with_adam(model, learning_rate, iterations, [SendSummary(model,writer,write_period=10)])#, SaveModel(save_folder, save_period=1000)])
+        train_with_nat_and_adam(model, learning_rate, None, iterations, callback=[SendSummary(model,writer,write_period=10)])#, SaveModel(save_folder, save_period=1000)])
         save_path = os.path.join(save_folder,'model.hdf5')
         logging.info("Saving model {}".format(save_path))
         self._save_model(model, save_path)
@@ -186,29 +190,29 @@ class PhaseOnlySolver(Solver):
             for name, value in vars.items():
                 f[name] = value
 
-    def _build_kernel(self, kern_dir_ls=0.3, kern_time_ls=50., kern_var=1., include_time=True, include_dir=True, **priors):
+    def _build_kernel(self, kern_dir_ls=0.5, kern_time_ls=50., kern_var=1., include_time=True, include_dir=True, **priors):
 
         kern_var = 1. if kern_var == 0. else kern_var
 
-        kern_dir = Matern32(2,active_dims=slice(0,2,1))
+        kern_dir = RBF(2,active_dims=slice(0,2,1))
         kern_dir.variance.trainable = False
         
         kern_dir.lengthscales = kern_dir_ls
         kern_dir_ls = log_normal_solve(kern_dir_ls, 0.5*kern_dir_ls)
         kern_dir.lengthscales.prior = LogNormal(kern_dir_ls[0], kern_dir_ls[1]**2)
-        kern_dir.lengthscales.trainable = False#True
+        kern_dir.lengthscales.trainable = True
 
-        kern_time = Matern32(1,active_dims=slice(2,3,1))
+        kern_time = RBF(1,active_dims=slice(2,3,1))
         
         kern_time.variance = kern_var
         kern_var = log_normal_solve(kern_var,0.5*kern_var)
         kern_time.variance.prior = LogNormal(kern_var[0], kern_var[1]**2)
-        kern_time.variance.trainable = False#True
+        kern_time.variance.trainable = True
 
         kern_time.lengthscales = kern_time_ls
         kern_time_ls = log_normal_solve(kern_time_ls, 0.5*kern_time_ls)
         kern_time.lengthscales.prior = LogNormal(kern_time_ls[0], kern_time_ls[1]**2)
-        kern_time.lengthscales.trainable = False#True
+        kern_time.lengthscales.trainable = True
 
         kern_white = gp.kernels.White(3)
         kern_white.variance = 1.
@@ -226,7 +230,7 @@ class PhaseOnlySolver(Solver):
 
         return kern_dir*kern_time
 
-    def _build_model(self, Y_var, freqs, X, Y, Z=None, q_mu = None, q_sqrt = None, M=None, P=None, L=None, W=None, num_data=None, jitter=1e-6, tec_scale=None, W_diag=False, **kwargs):
+    def _build_model(self, Y_var, freqs, dir_idx, X, Y, facet_weights=None, Z=None, q_mu = None, q_sqrt = None, M=None, P=None, L=None, W=None, num_data=None, jitter=1e-6, tec_scale=None, W_diag=False, **kwargs):
         """
         Build the model from the data.
         X,Y: tensors the X and Y of data
@@ -241,26 +245,28 @@ class PhaseOnlySolver(Solver):
         with gp.defer_build():
             # Define the likelihood
             likelihood = WrappedPhaseGaussianEncodedHetero(tec_scale=tec_scale, K=2)
-            likelihood.variance = 0.3**2#(5.*np.pi/180.)**2
-            likelihood_var = log_normal_solve((5.*np.pi/180.)**2, 0.5*(5.*np.pi/180.)**2)
-            likelihood.variance.prior = LogNormal(likelihood_var[0],likelihood_var[1]**2)
-            likelihood.variance.transform = gp.transforms.Rescale(np.pi/180.)(gp.transforms.positive)
-            likelihood.variance.trainable = False
- 
+#            likelihood.variance = 0.3**2#(5.*np.pi/180.)**2
+#            likelihood_var = log_normal_solve((5.*np.pi/180.)**2, 0.5*(5.*np.pi/180.)**2)
+#            likelihood.variance.prior = LogNormal(likelihood_var[0],likelihood_var[1]**2)
+#            likelihood.variance.transform = gp.transforms.Rescale(np.pi/180.)(gp.transforms.positive)
+#            likelihood.variance.trainable = False
+
+
             q_mu = q_mu/tec_scale #M, L
             q_sqrt = q_sqrt/tec_scale# L, M, M
 
             kern = mk.SeparateMixedMok([self._build_kernel(kern_var = np.var(q_mu[:,l]), **kwargs.get("priors",{})) for l in range(L)], W)
+
             if W_diag:
 #                kern.W.transform = Reshape(W.shape,(P,L,L))(gp.transforms.DiagMatrix(L)(gp.transforms.positive))
                 kern.W.trainable = False
             else:
-                kern.W.transform = Reshape(W.shape,(P//L,L,L))(MatrixSquare()(gp.transforms.LowerTriangular(L,P//L)))
+#                kern.W.transform = Reshape(W.shape,(P//L,L,L))(MatrixSquare()(gp.transforms.LowerTriangular(L,P//L)))
                 kern.W.trainable = True
             
             feature = mf.MixedKernelSeparateMof([InducingPoints(Z) for _ in range(L)])
             mean = Zero()
-            model = HeteroscedasticPhaseOnlySVGP(Y_var, freqs, X, Y, kern, likelihood, 
+            model = HeteroscedasticPhaseOnlySVGP(Y_var, freqs, dir_idx, facet_weights, X, Y, kern, likelihood, 
                         feat = feature,
                         mean_function=mean, 
                         minibatch_size=None,
@@ -268,17 +274,26 @@ class PhaseOnlySolver(Solver):
                         num_data = num_data,
                         whiten = False, 
                         q_mu = q_mu, 
-                        q_sqrt = q_sqrt)
+                        q_sqrt = q_sqrt, 
+                        q_diag = False)
             for feat in feature.feat_list:
-                feat.Z.trainable = False
+                feat.Z.trainable = True
             model.q_mu.trainable = True
             model.q_sqrt.trainable = True
-#            model.q_sqrt.prior = gp.priors.Gaussian(q_sqrt, 0.005**2)
+#            model.q_sqrt.prior = gp.priors.Gaussian(0., (0.005/tec_scale)**2)
             model.compile()
             tf.summary.image('W',kern.W.constrained_tensor[None,:,:,None])
             tf.summary.image('q_mu',model.q_mu.constrained_tensor[None,:,:,None])
             tf.summary.image('q_sqrt',model.q_sqrt.constrained_tensor[:,:,:,None])
-        return model
+            tf.summary.image('facet_weights',model.facet_weights.constrained_tensor[None,:,None,None])
+
+            for i,feat in enumerate(feature.feat_list):
+                tf.summary.histogram('Z{}_ra'.format(i),feat.Z.constrained_tensor[:,0])
+                tf.summary.histogram('Z{}_dec'.format(i),feat.Z.constrained_tensor[:,1])
+                tf.summary.histogram('Z{}_time'.format(i),feat.Z.constrained_tensor[:,2])
+                    
+
+            return model
 
     def _get_data(self,indices,data_shape, dtype=settings.np_float):
         """
@@ -290,7 +305,7 @@ class PhaseOnlySolver(Solver):
         Y array tf.float64 [N, P]
         weights array tf.float64 [N, P]
         """
-        idx = np.sort(np.ravel_multi_index(indices.T, data_shape))
+        idx = np.ravel_multi_index(indices.T, data_shape)
 
         with h5py.File(self.coord_file) as f:
             Y_ = f['/data/Y']
@@ -299,10 +314,13 @@ class PhaseOnlySolver(Solver):
             Y_var = np.stack([Y_var_[i,...] for i in idx], axis=0)
             freqs_ = f['/data/freqs']
             freqs = np.stack([freqs_[i,...] for i in idx], axis=0)
+            dir_idx_ = f['/data/dir_idx']
+            dir_idx = np.stack([dir_idx_[i,...] for i in idx], axis=0)
+
             X_ = f['/data/X']
             X = np.stack([X_[i,...] for i in idx], axis=0)
 
-        return Y_var.astype(dtype), freqs.astype(dtype), X.astype(dtype), Y.astype(dtype)
+        return Y_var.astype(dtype), freqs.astype(dtype), dir_idx.astype(dtype), X.astype(dtype), Y.astype(dtype)
 
     def _get_soltab_coords(self, solset, soltab, ant_sel=None, time_sel=None, dir_sel=None, freq_sel=None, pol_sel=None, no_freq=False, **kwargs):
         """
@@ -334,7 +352,8 @@ class PhaseOnlySolver(Solver):
             X_d = np.stack([ra,dec],axis=1)
             X_t = ((times.mjd - times[0].mjd)*86400.)[:,None]
             if not no_freq:
-                return np.tile(make_coord_array(X_d, X_t, flat=False)[:,None,:,:], (1, Nf, 1, 1))
+                X_f = freqs[:,None]
+                return make_coord_array(X_d, X_f, X_t, flat=False)[..., [0,1,3]]
             return make_coord_array(X_d, X_t, flat=False)
 
     def _get_soltab_data(self,solset, soltab, ant_sel=None, time_sel=None, dir_sel=None, freq_sel=None, pol_sel=None, **kwargs):
@@ -362,21 +381,30 @@ class PhaseOnlySolver(Solver):
 
             # Npol, Nd, Na, Nt
             tec, _ = self.datapack.tec
+            def _wrap(phi):
+                return np.angle(np.exp(1j*phi))
 
             # Npol, Nd, Na, Nf, Nt
             phase_pred = tec[...,None,:]*(-8.4480e9/freqs[:,None])
-            Y_var = np.tile(np.mean(np.square(phase-phase_pred), axis=-2, keepdims=True),(1,1,1,Nf,1))
+            Y_var = np.tile(np.mean(np.square(_wrap(_wrap(phase)-_wrap(phase_pred))), axis=-2, keepdims=True),(1,1,1,Nf,1))
+            Y_var = np.maximum((5*np.pi/180.)**2, Y_var)
+
+            Y_var[:,[3,9,10,11,12,16,17,27,31,35],:,:,:] += np.pi**2
+
 #            if not self.datapack.readonly:
 #                self.datapack.weights_phase = 1./Y_var
             
             freqs = np.tile(freqs[None, None, None, :, None], (Npol, Nd, Na, 1, Nt))
+            dir_idx = np.arange(Nd)
+            dir_idx = np.tile(dir_idx[None,:,None, None, None], (Npol, 1, Na, Nf, Nt))
 
             # Nd, Nf, Nt, Na,Npol
             Y = phase.transpose((1,3,4,2,0))
             Y_var = Y_var.transpose((1,3,4,2,0))
             freqs = freqs.transpose((1,3,4,2,0))
+            dir_idx = dir_idx.transpose((1,3,4,2,0))
 
-            return Y, Y_var, freqs
+            return Y, Y_var, freqs, dir_idx
 
     
     def _prepare_data(self,datapack,ant_sel=None, time_sel=None, dir_sel=None, freq_sel=None, pol_sel=None,reweight_obs=False, recalculate_coords=False, dof_ratio=40., weight_smooth_len=40, screen_res=30, solset='sol000',coord_file=None, posterior_time_sel = None, **kwargs):
@@ -428,7 +456,7 @@ class PhaseOnlySolver(Solver):
             #Nd, Nf, Nt, ndim
             X = self._get_soltab_coords(self.solset, self.soltab, ant_sel=ant_sel,time_sel=time_sel, dir_sel=dir_sel, freq_sel=freq_sel, pol_sel=pol_sel)
             #Nd, Nf, Nt, Na, Npol
-            Y, Y_var, freqs = self._get_soltab_data(self.solset, self.soltab, ant_sel=ant_sel,time_sel=time_sel, dir_sel=dir_sel, freq_sel=freq_sel, pol_sel=pol_sel)
+            Y, Y_var, freqs, dir_idx = self._get_soltab_data(self.solset, self.soltab, ant_sel=ant_sel,time_sel=time_sel, dir_sel=dir_sel, freq_sel=freq_sel, pol_sel=pol_sel)
 
              ###
             # input coords not thread safe
@@ -436,11 +464,14 @@ class PhaseOnlySolver(Solver):
             logging.info("Creating temporary data source file: {}".format(self.coord_file)) 
 
             with h5py.File(self.coord_file) as f:
-                #Nd*Nt, ndim
+                #Nd*Nf*Nt, ndim
                 f['/data/X'] = X.reshape((-1, ndim))
                 f['/data/Y'] = Y.reshape((-1, P))
                 f['/data/Y_var'] = Y_var.reshape((-1, P))
                 f['/data/freqs'] = freqs.reshape((-1, P))
+                f['/data/dir_idx'] = dir_idx.reshape((-1, P))
+
+            self.model_input_num = 5
 
 
             logging.info("Initializing sparse conditions: q_mu and q_sqrt")
@@ -454,6 +485,7 @@ class PhaseOnlySolver(Solver):
             #Npol, Nd, Na, Nt -> Nd, Na, Nt -> Nd, Nt, Na -> Nd*Nt, Na
             tec = tec.mean(0).transpose((0,2,1)).reshape((-1, L))
             tec_std = tec_std.max(0).transpose((0,2,1)).reshape((-1,L))
+#            tec_std = 0.01*np.ones_like(tec)
 
             idx = np.random.choice(Nd*Nt, size=M, replace=False)
             Z = X[:,0,:,:].reshape((-1,ndim))[idx,:]#M,D
@@ -461,6 +493,9 @@ class PhaseOnlySolver(Solver):
             q_sqrt = np.stack([np.diag(tec_std[idx,l]) for l in range(L)],axis=0)#L, M, M
 
             W = np.reshape(np.ones(Npol)[:,None,None]*np.eye(Na)[None, :,:],(P,L))
+
+            facet_weights = 0.01*np.ones(Nd)
+            facet_weights[[3,9,10,11,12,16,17,27,31,35]] = np.pi-0.01
                         
             data_shape = (Nd, Nf, Nt)
             build_params = {
@@ -471,7 +506,9 @@ class PhaseOnlySolver(Solver):
                     'M': M,
                     'P':P,
                     'L':L,
-                    'num_data':num_data}
+                    'num_data':num_data,
+                    'facet_weights':facet_weights
+                    }
 
             return data_shape, build_params
     

@@ -33,11 +33,6 @@ class HeteroscedasticTecSVGP(SVGP):
         # Get conditionals
         fmean, fvar = self._build_predict(self.X, full_cov=False, full_output_cov=False)
         
-
-#        cov = self.kern.K(self.X, full_output_cov=False)#P,N,N
-#        tf.summary.image('Kxx',cov[..., None])
-
-
         # Get variational expectations.
         var_exp = self.likelihood.variational_expectations(fmean, fvar, self.Y, self.Y_var)
 
@@ -74,8 +69,8 @@ class HeteroscedasticTecSVGP(SVGP):
         eval_freq : float the eval freq for phase
         """
         Fmean, Fvar = self._build_predict(Xnew, full_cov=False)
-        tec_conversion = -8.4480e9/freq
-        return tec_conversion * Fmean*self.likelihood.tec_scale, tec_conversion**2 * Fvar*self.likelihood.tec_scale**2
+        tec_conversion = (-8.4480e9/freq)*self.likelihood.tec_scale
+        return tec_conversion * Fmean, tec_conversion**2 * Fvar
 
 
     @autoflow((float_type, [None, None]), (float_type, [None, None]), (float_type, [None, None]), (float_type, [None, None]))

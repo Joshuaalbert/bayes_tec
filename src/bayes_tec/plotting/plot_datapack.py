@@ -36,7 +36,7 @@ class DatapackPlotter(object):
             datapack = DataPack(filename=datapack,readonly=True)
         self.datapack = datapack
     
-    def _create_polygon_plot(self,points, values=None, N = None,ax=None,cmap=plt.cm.bone,overlay_points=None,title=None,polygon_labels=None,reverse_x=False):
+    def _create_polygon_plot(self,points, values=None, N = None,ax=None,cmap=plt.cm.bone,overlay_points=None,annotations=None,title=None,polygon_labels=None,reverse_x=False):
         # get nearest points (without odd voronoi extra regions)
         k = cKDTree(points)
         dx = np.max(points[:,0]) - np.min(points[:,0])
@@ -74,7 +74,12 @@ class DatapackPlotter(object):
         ax.add_collection(p)
         #plt.colorbar(p)
         if overlay_points is not None:
-            ax.scatter(overlay_points[:,0],overlay_points[:,1],marker='+',c='black')
+            if annotations is None:
+                ax.scatter(overlay_points[:,0],overlay_points[:,1],marker='+',c='black')
+            else:
+                for point, a in zip(overlay_points, annotations):
+                    ax.text(point[0],point[1],a,ha='center',va='center',backgroundcolor=(1.,1.,1., 0.1))
+
         if reverse_x:
             ax.set_xlim([np.max(points_i[:,0]),np.min(points_i[:,0])])
         else:
@@ -92,7 +97,7 @@ class DatapackPlotter(object):
 #            ax.annotate(title,xy=(0.8,0.8),xycoords='axes fraction')
         return ax, p
     
-    def _create_image_plot(self,points, values=None, N = None,ax=None,cmap=plt.cm.bone,overlay_points=None,title=None,reverse_x=False):
+    def _create_image_plot(self,points, values=None, N = None,ax=None,cmap=plt.cm.bone,overlay_points=None,annotations=None,title=None,reverse_x=False):
         '''
         Create initial plot, with image data instead of polygons.
         points: (ra, dec) 
@@ -113,7 +118,11 @@ class DatapackPlotter(object):
         y = np.linspace(np.min(points[1]),np.max(points[1]),Ndec)
         img = ax.imshow(values,origin='lower',cmap=cmap, aspect='auto', extent=(x[0],x[-1],y[0],y[-1]))
         if overlay_points is not None:
-            ax.scatter(overlay_points[:,0],overlay_points[:,1],marker='+',c='black')
+            if annotations is None:
+                ax.scatter(overlay_points[:,0],overlay_points[:,1],marker='+',c='black')
+            else:
+                for point, a in zip(overlay_points, annotations):
+                    ax.text(point[0],point[1],a,ha='center',va='center',backgroundcolor=(1.,1.,1., 0.1))
         if reverse_x:
             ax.set_xlim([x[-1],x[0]])
         else:
@@ -140,10 +149,12 @@ class DatapackPlotter(object):
         else:
             save_fig = True
             show = show and True #False
+
         if plot_patchnames:
             plot_facet_idx = False
         if plot_patchnames or plot_facet_idx:
             plot_crosses = False
+
         if not show:
             logging.debug('turning off display')
             matplotlib.use('Agg')
@@ -166,6 +177,7 @@ class DatapackPlotter(object):
             #obs is dir, ant, freq, time
             antenna_labels, antennas = self.datapack.get_antennas(axes['ant'])
             patch_names, directions = self.datapack.get_sources(axes['dir'])
+            
             timestamps, times = self.datapack.get_times(axes['time'])
             freq_dep = True
             try:
@@ -210,7 +222,7 @@ class DatapackPlotter(object):
             if not plot_screen:
                 ### points are normal
                 points = np.array([ra,dec]).T
-                if plot_crosses:
+                if plot_crosses or plot_patchnames or plot_facet_idx:
                     overlay_points = points
                 else:
                     overlay_points = None
@@ -230,8 +242,13 @@ class DatapackPlotter(object):
                     overlay_points = None # put the facet (ra,dec).T
                 else:
                     overlay_points = None
-                
-
+        if plot_patchnames:
+            annotations = patch_names
+        elif plot_facet_idx:
+            annotations = np.array([str(k) for k in range(Nd)])
+        else:
+            annotations = None
+        
         if fignames is not None:
             if not isinstance(fignames,(tuple,list)):
                 fignames = [fignames]
@@ -266,11 +283,13 @@ class DatapackPlotter(object):
                     if plot_screen:
                         _, p = self._create_image_plot(points, values=None, N = None,
                                 ax=ax,cmap=cmap,overlay_points=overlay_points,
+                                annotations=annotations,
                                 title="{} {:.1f}km".format(title, ref_dist[c]),
                                 reverse_x=labels_in_radec)
                     else:
                         _, p = self._create_polygon_plot(points, values=None, N = None,
                                 ax=ax,cmap=cmap,overlay_points=overlay_points,
+                                annotations=annotations,
                                 title="{} {:.1f}km".format(title, ref_dist[c]),
                                 reverse_x=labels_in_radec)
                     p.set_clim(vmin,vmax)
@@ -456,7 +475,7 @@ def plot_data_vs_solution(datapack,output_folder, data_solset='sol000', solution
                         std = stds[0]
                         label = "{} {} {:.1f}MHz {}:{}".format(data_solset,axes['pol'][p], axes['freq'][f]/1e6, axes['ant'][a], axes['dir'][d])
                         if show_prior_uncert:
-                            ax.fill_between(times.mjd,phase[p,d,a,f,:]-2*std[p,d,a,f,:],phase[p,d,a,f,:]+2*std[p,d,a,f,:],alpha=0.5,label=r'$\pm2\hat{\sigma}_\phi$')#,color='blue')
+                            ax.fill_between(times.mjd,phase[p,d,a,f,:]-std[p,d,a,f,:],phase[p,d,a,f,:]+std[p,d,a,f,:],alpha=0.5,label=r'$\pm2\hat{\sigma}_\phi$')#,color='blue')
                         ax.scatter(times.mjd,phase[p,d,a,f,:],marker='+',alpha=0.3,color='black',label=label)
 
                         ###
@@ -464,8 +483,8 @@ def plot_data_vs_solution(datapack,output_folder, data_solset='sol000', solution
                         phase = phases[1]
                         std = stds[1]
                         label = "Solution: {}".format(solution_solset)
-                        ax.fill_between(times.mjd,phase[p,d,a,f,:]-2*std[p,d,a,f,:],phase[p,d,a,f,:]+2*std[p,d,a,f,:],alpha=0.5,label=r'$\pm2\hat{\sigma}_\phi$')#,color='blue')
-                        ax.plot(times.mjd,phase[p,d,a,f,:],label=label)
+                        ax.fill_between(times.mjd,phase[p,d,a,f,:]-std[p,d,a,f,:],phase[p,d,a,f,:]+std[p,d,a,f,:],alpha=0.5,label=r'$\pm\hat{\sigma}_\phi$')#,color='blue')
+                        ax.scatter(times.mjd,phase[p,d,a,f,:],label=label,marker='.',s=5.)
 
                         ax.set_xlabel('Time [mjd]')
                         ax.set_ylabel('Phase deviation [rad.]')
