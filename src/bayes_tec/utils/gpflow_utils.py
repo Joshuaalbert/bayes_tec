@@ -144,7 +144,9 @@ class GammaSchedule(Action):
     def run(self, ctx):
         ctx.session.run(self.op_increment_gamma)
 
-def train_with_nat_and_adam(model, lr, gamma, iterations, var_list=None, callback=None):
+def train_with_nat_and_adam(model, initial_learning_rate=0.1,learning_rate_steps=2,
+              learning_rate_decay=1.5,gamma_start=1e-5,gamma_add=1e-3,gamma_mul=1.1,
+             gamma_max=0.15,gamma_fallback=1e-1,iterations=500, var_list=None, callback=None, **kwargs):
     # we'll make use of this later when we use a XiTransform
     if var_list is None:
         var_list = [[model.q_mu, model.q_sqrt]]
@@ -155,9 +157,9 @@ def train_with_nat_and_adam(model, lr, gamma, iterations, var_list=None, callbac
 
     with tf.variable_scope("learning_rate"):
         global_step = tf.Variable(0, trainable=False)
-        starter_learning_rate = 1e-1
-        decay_steps = int(iterations//3)
-        decay_rate = 1./3.
+        starter_learning_rate = initial_learning_rate
+        decay_steps = int(iterations/learning_rate_steps)
+        decay_rate = 1./learning_rate_decay
         learning_rate = tf.train.exponential_decay(starter_learning_rate,
                                                   tf.assign_add(global_step,1), decay_steps, decay_rate, staircase=True)
     tf.summary.scalar("optimisation/learning_rate",learning_rate)
@@ -167,16 +169,20 @@ def train_with_nat_and_adam(model, lr, gamma, iterations, var_list=None, callbac
 
     
     with tf.variable_scope("gamma"):
-        gamma_start = 1e-5
-        gamma_max = tf.cast(1.,tf.float64)
-        mul_step = tf.cast(1.1,tf.float64)
-        add_step = tf.cast(1e-3,tf.float64)
+
+#        gamma = tf.Variable(gamma_start, dtype=tf.float64)
+#        beta = tf.Variable(1.,dtype=tf.float64)
+        
+        gamma_start = tf.cast(gamma_start,tf.float64)
+        gamma_max = tf.cast(gamma_max,tf.float64)
+        mul_step = tf.cast(gamma_mul,tf.float64)
+        add_step = tf.cast(gamma_add,tf.float64)
         gamma = tf.Variable(gamma_start, dtype=tf.float64)
 
         gamma_ref = tf.identity(gamma)
         
 
-        gamma_fallback = tf.cast(1e-1, tf.float64)   # we'll reduce by this factor if there's a cholesky failure 
+        gamma_fallback = tf.cast(gamma_fallback, tf.float64)   # we'll reduce by this factor if there's a cholesky failure 
         op_fallback_gamma = tf.assign(gamma, gamma * gamma_fallback) 
 
         diff = tf.where(gamma_ref*mul_step < add_step, gamma_ref*mul_step, add_step)

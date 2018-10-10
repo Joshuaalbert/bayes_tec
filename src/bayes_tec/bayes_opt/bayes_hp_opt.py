@@ -15,7 +15,9 @@ import pylab as plt
 plt.style.use('ggplot')
                                                                                                                                                                                    
 class BayesHPOpt(object):                                                                                                                                                          
-    def __init__(self, objectivefx, fit_params = {}, folds=3, n_jobs=1, init = None):                                                                                              
+    def __init__(self, objectivefx, fit_params = {}, folds=3, n_jobs=1, init = None, t=0.5, first_tries=None):   
+        self.t=t
+        self.first_tries = np.array(first_tries)
         self.folds = 3                                                                                                                                                             
         self.n_jobs = 1                                                                                                                                                            
         self._objectivefx = objectivefx                                                                                                                                            
@@ -77,6 +79,21 @@ class BayesHPOpt(object):
         y = self._objectivefx(**kwargs)
         return y
 
+
+    def get_kwargs(self, params):
+        params = params.flatten()
+        args = {}
+        for c,p,t in zip(self.domain, params, self.domain_type):
+            if t == 'log':
+                args[c.label] = np.exp(p)
+            elif t == 'bin':
+                args[c.label] = 1. if np.random.uniform() < p else 0.
+            elif t == 'int':
+                args[c.label] = int(p)
+            else:
+                args[c.label] = p
+        return args
+
     def objective(self, params):
         logging.warning("=== Starting iteration {} ===".format(self.iter))
         params = params.flatten()
@@ -90,6 +107,7 @@ class BayesHPOpt(object):
                 args[c.label] = int(p)
             else:
                 args[c.label] = p
+        logging.warning("Running with {}".format(args))
         self.X.append(params)
         y = self._objective(**args) # scalar
         self.Y.append(np.array([y]))
@@ -98,11 +116,29 @@ class BayesHPOpt(object):
         logging.warning("{} : {}".format(args, y))
         self.iter += 1
         return np.array([[y]]) # 1, 1
+
+    def print_top_k(self,k=5):
+        f = self.ei.data[1][:,0]
+        x = self.ei.data[0]
+        a = np.argsort(f)
+        for j, i in enumerate(a[:k]):
+            kwargs = self.get_kwargs(x[i])
+            logging.warning("{} ({})  : {} -> {}".format(j, i, f[i], kwargs))
+
+        mean_x = x[a[:k]].mean(0)
+        std_x = x[a[:k]].std(0)
+        mean = self.get_kwargs(mean_x)
+        lb = self.get_kwargs(mean_x-std_x)
+        ub = self.get_kwargs(mean_x+std_x)
+        for key in mean.keys():
+            logging.warning("{} : {} < {} < {}".format(key,lb[key],mean[key],ub[key]))
+
     
     def plot_results(self):
         f = self.ei.data[1][:,0]
         plt.plot(np.arange(0, self.ei.data[0].shape[0]), np.minimum.accumulate(f))
-        plt.vlines(self.burnin-1,np.min(f), np.max(np.minimum.accumulate(f)),linestyles='--',label='burn-in')
+        xmin = np.argmin(f)
+        plt.vlines(xmin,np.min(f), np.max(np.minimum.accumulate(f)),linestyles='--',label='fmin')
         plt.ylabel('fmin')
         plt.xlabel('Number of evaluated points')
         plt.legend()
@@ -119,6 +155,12 @@ class BayesHPOpt(object):
         self.Y = [] + self.init_Y
         
         domain = np.sum(self.domain)
+
+#        if self.first_tries is not None:
+#            Y = [self.objective(x).flatten() for x in self.first_tries]
+#            self.Y = self.Y + Y
+#            self.X = self.X + list(self.first_tries)
+
         if init_design_size > 0:
             design = LatinHyperCube(init_design_size,domain)
             X = list(design.generate())
@@ -145,16 +187,18 @@ class BayesHPOpt(object):
             m.likelihood.variance = np.exp(lik_var[0])
             m.likelihood.variance.prior = gp.priors.LogNormal(lik_var[0], lik_var[1]**2)
             m.compile()
-        self.ei = MomentGeneratingFunctionImprovement(m, 0.5)
+        self.ei = MomentGeneratingFunctionImprovement(m, self.t)
         opt = optim.StagedOptimizer([optim.MCOptimizer(domain, 5000), optim.SciPyOptimizer(domain)])
         optimizer = BayesianOptimizer(domain, self.ei, optimizer=opt, hyper_draws=1)
 
-        with optimizer.silent():
-            result = optimizer.optimize(self.objective, n_iter=n_iter)
-            logging.warning(result)
-            if plot:
-                self.plot_results()
-            return result.x
+        #with optimizer.silent():
+        result = optimizer.optimize(self.objective, n_iter=n_iter)
+        logging.warning(result)
+        if plot:
+            self.plot_results()
+        result = self.get_kwargs(result.x)
+        self.print_top_k(5)
+        return result
 
 def test():
     def fx(a,b):

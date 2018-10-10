@@ -31,7 +31,7 @@ class Solver(object):
             datapack = DataPack(datapack)
         self.datapack = datapack
 
-    def solve(self, output_solset='posterior_sol', load_model=None, **kwargs):
+    def solve(self, output_solset='posterior_sol', load_model=None, return_likelihood=False, **kwargs):
         """Run the solver"""
         logging.info("Starting solve")
         self.output_solset = output_solset
@@ -92,6 +92,10 @@ class Solver(object):
 
             logging.info("Finalize routines")
             self._finalize(self.datapack, **kwargs)
+            if return_likelihood:
+                logging.info("Calculating final log-likelihood of data")
+                logging.info("Done")
+                return self._compute_likelihood(model,**kwargs)
             logging.info("Done")
 
     def _finalize(self, datapack, **kwargs):
@@ -124,6 +128,16 @@ class Solver(object):
         varstar [batch, P] predictive variance at the coords
         """
         raise NotImplementedError("Must subclass")
+
+    def _compute_likelihood(self, model, **kwargs):
+        """
+        Predict the model at the coords.
+        model: GPflow model
+        returns:
+        Average log-likelihood
+        """
+        raise NotImplementedError("Must subclass")
+
 
     def _train_model(self, model, save_folder, **kwargs):
         """

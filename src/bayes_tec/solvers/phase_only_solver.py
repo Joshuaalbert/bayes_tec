@@ -15,7 +15,7 @@ import numpy as np
 from ..frames import ENU
 import uuid
 import h5py
-from ..utils.stat_utils import log_normal_solve
+from ..utils.stat_utils import log_normal_solve, log_normal_solve_fwhm
 from ..utils.gpflow_utils import train_with_nat_and_adam, train_with_adam, SendSummary, SaveModel, Reshape, MatrixSquare
 from ..likelihoods import WrappedPhaseGaussianEncodedHetero
 from ..kernels import ThinLayer
@@ -110,7 +110,7 @@ class PhaseOnlySolver(Solver):
             yield X_batch
 
 
-    def _save_posterior(self, ystar, varstar, datapack, data_shape, screen=False, ant_sel=None, time_sel=None, dir_sel=None, freq_sel=None, pol_sel=None, **kwargs):
+    def _save_posterior(self, ystar, varstar, datapack, data_shape, screen=False, ant_sel=None, time_sel=None, dir_sel=None, freq_sel=None, pol_sel=None, posterior_save_settings = {}, **kwargs):
         """
         Save the results in the datapack in the appropriate slots
         ystar: array [N, P]
@@ -119,7 +119,11 @@ class PhaseOnlySolver(Solver):
         data_shape: tuple of ints where prod(data_shape) == N
         screen: bool if True save in the screen slot
         """
+
+        
+        
         with datapack:
+            # reshape first
             if screen:
                 datapack.switch_solset(self.output_screen_solset)
                 datapack.select(ant=ant_sel, time=time_sel, dir=None, freq=freq_sel, pol=pol_sel)
@@ -136,11 +140,25 @@ class PhaseOnlySolver(Solver):
 
             Npol, Nd, Na,  Nt = len(pols), len(directions), len(antennas), len(times)
             
+            # Nd, Nt, Na*Npol -> Nd, Nt, Na, Npol -> Npol, Nd, Na, Nt
             ystar = ystar.reshape((Nd, Nt, Na, Npol)).transpose((3,0,2,1))
-            varstar = varstar.reshape((Nd, Na, Nt, Npol)).transpose((3,0,2,1))
+            varstar = varstar.reshape((Nd, Nt, Na, Npol)).transpose((3,0,2,1))
+            
+            # store relevant piece
+            time_sel = posterior_save_settings.get('save_time_sel', time_sel)
+            subset_slice = posterior_save_settings.get('subset_slice',slice(None,None,1))
+            logging.debug(time_sel)
+            logging.debug(subset_slice)
 
-            datapack.tec = ystar
-            datapack.weights_tec = 1./varstar
+            if screen:
+                #datapack.switch_solset(self.output_screen_solset)
+                datapack.select(ant=ant_sel, time=time_sel, dir=None, freq=freq_sel, pol=pol_sel)
+            else:
+                #datapack.switch_solset(self.output_solset)
+                datapack.select(ant=ant_sel, time=time_sel, dir=None, freq=freq_sel, pol=pol_sel)
+
+            datapack.tec = ystar[:,:,:,subset_slice]
+            datapack.weights_tec = 1./varstar[:,:,:,subset_slice]
 
     def _predict_posterior(self, model, X, **kwargs):
         """
@@ -156,14 +174,25 @@ class PhaseOnlySolver(Solver):
         ystar, varstar = model.predict_dtec(X) 
         return ystar, varstar
 
+    def _compute_likelihood(self, model, num_likelihood_samples=100, **kwargs):
+        """
+        Predict the model at the coords.
+        model: GPflow model
+        returns:
+        Average log-likelihood
+        """
+        liks = [model.compute_log_likelihood() for _ in range(num_likelihood_samples)]
+        return np.mean(liks), np.std(liks)
 
-    def _train_model(self, model, save_folder, writer, learning_rate=1e-2, iterations=5000, **kwargs):
+    def _train_model(self, model, save_folder, writer,  iterations=5000, **kwargs):
         """
         Train the model.
         Returns the saved model.
         """
+
 #        train_with_adam(model, learning_rate, iterations, [SendSummary(model,writer,write_period=10)])#, SaveModel(save_folder, save_period=1000)])
-        train_with_nat_and_adam(model, learning_rate, None, iterations, callback=[SendSummary(model,writer,write_period=10)])#, SaveModel(save_folder, save_period=1000)])
+        var_list = [[model.q_mu, model.q_sqrt]]# + [feat.Z for feat in model.feature.feat_list]]
+        train_with_nat_and_adam(model, iterations=iterations, callback=[SendSummary(model,writer,write_period=10)], **kwargs)#, SaveModel(save_folder, save_period=1000)])
         save_path = os.path.join(save_folder,'model.hdf5')
         logging.info("Saving model {}".format(save_path))
         self._save_model(model, save_path)
@@ -190,7 +219,7 @@ class PhaseOnlySolver(Solver):
             for name, value in vars.items():
                 f[name] = value
 
-    def _build_kernel(self, kern_dir_ls=0.5, kern_time_ls=50., kern_var=1., include_time=True, include_dir=True, **priors):
+    def _build_kernel(self, kern_ls_lower=0.75, kern_ls_upper=1.25, kern_dir_ls=0.5, kern_time_ls=50., kern_var=1., include_time=True, include_dir=True, **priors):
 
         kern_var = 1. if kern_var == 0. else kern_var
 
@@ -198,25 +227,25 @@ class PhaseOnlySolver(Solver):
         kern_dir.variance.trainable = False
         
         kern_dir.lengthscales = kern_dir_ls
-        kern_dir_ls = log_normal_solve(kern_dir_ls, 0.5*kern_dir_ls)
+        kern_dir_ls = log_normal_solve_fwhm(kern_dir_ls*kern_ls_lower, kern_dir_ls*kern_ls_upper, D=0.1)#kern_dir_ls, 0.5*kern_dir_ls)
         kern_dir.lengthscales.prior = LogNormal(kern_dir_ls[0], kern_dir_ls[1]**2)
         kern_dir.lengthscales.trainable = True
 
         kern_time = RBF(1,active_dims=slice(2,3,1))
         
         kern_time.variance = kern_var
-        kern_var = log_normal_solve(kern_var,0.5*kern_var)
+        kern_var = log_normal_solve_fwhm(kern_var*kern_ls_lower, kern_var*kern_ls_upper, D=0.1)#log_normal_solve(kern_var,0.5*kern_var)
         kern_time.variance.prior = LogNormal(kern_var[0], kern_var[1]**2)
         kern_time.variance.trainable = True
 
         kern_time.lengthscales = kern_time_ls
-        kern_time_ls = log_normal_solve(kern_time_ls, 0.5*kern_time_ls)
+        kern_time_ls = log_normal_solve_fwhm(kern_time_ls*kern_ls_lower, kern_time_ls*kern_ls_upper, D=0.1)#kern_time_ls, 0.5*kern_time_ls)
         kern_time.lengthscales.prior = LogNormal(kern_time_ls[0], kern_time_ls[1]**2)
         kern_time.lengthscales.trainable = True
 
         kern_white = gp.kernels.White(3)
         kern_white.variance = 1.
-        kern_time.variance.trainable = False#True
+        kern_white.variance.trainable = False#True
 
         if include_time:
             if include_dir:
@@ -249,7 +278,7 @@ class PhaseOnlySolver(Solver):
 #            likelihood_var = log_normal_solve((5.*np.pi/180.)**2, 0.5*(5.*np.pi/180.)**2)
 #            likelihood.variance.prior = LogNormal(likelihood_var[0],likelihood_var[1]**2)
 #            likelihood.variance.transform = gp.transforms.Rescale(np.pi/180.)(gp.transforms.positive)
-#            likelihood.variance.trainable = False
+            likelihood.variance.trainable = False
 
 
             q_mu = q_mu/tec_scale #M, L
@@ -277,7 +306,7 @@ class PhaseOnlySolver(Solver):
                         q_sqrt = q_sqrt, 
                         q_diag = False)
             for feat in feature.feat_list:
-                feat.Z.trainable = True
+                feat.Z.trainable = True #True
             model.q_mu.trainable = True
             model.q_sqrt.trainable = True
 #            model.q_sqrt.prior = gp.priors.Gaussian(0., (0.005/tec_scale)**2)
@@ -285,7 +314,7 @@ class PhaseOnlySolver(Solver):
             tf.summary.image('W',kern.W.constrained_tensor[None,:,:,None])
             tf.summary.image('q_mu',model.q_mu.constrained_tensor[None,:,:,None])
             tf.summary.image('q_sqrt',model.q_sqrt.constrained_tensor[:,:,:,None])
-            tf.summary.image('facet_weights',model.facet_weights.constrained_tensor[None,:,None,None])
+#            tf.summary.image('facet_weights',model.facet_weights.constrained_tensor[None,:,None,None])
 
             for i,feat in enumerate(feature.feat_list):
                 tf.summary.histogram('Z{}_ra'.format(i),feat.Z.constrained_tensor[:,0])
