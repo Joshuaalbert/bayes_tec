@@ -4,6 +4,7 @@ import argparse
 from bayes_tec.datapack import DataPack
 from bayes_tec.bayes_opt.maximum_likelihood_tec import solve_ml_tec
 import numpy as np
+from bayes_tec.utils.data_utils import calculate_weights
 
 def run_solve(flags):
 
@@ -23,20 +24,59 @@ def run_solve(flags):
         _, freqs = datapack.get_freqs(axes['freq'])
 
         Npol, Nd, Na, Nf, Nt = phase_.shape
+        std = np.sqrt(0.5*calculate_weights(phase_,indep_axis=-2,N=len(freqs)//4,min_uncert=0.001) + 0.5*calculate_weights(phase_,indep_axis=-1,N=10,min_uncert=0.001))
+        std = np.exp(np.median(np.log(std),axis=-2,keepdims=True))
+
         phase = phase_.transpose((0,1,2,4,3))
         phase = phase.reshape((-1, Nf))
-    tec_ml, sigma_ml = solve_ml_tec(phase, freqs, batch_size=flags.batch_size,max_tec=flags.max_tec, n_iter=flags.n_iter, t=flags.t,num_proposal=flags.num_proposal, verbose=True)
+
+        std = std.transpose((0,1,2,4,3))
+        std = std.reshape((-1, 1))
+
+    
+    tec_ml, sigma_ml = solve_ml_tec(phase, freqs, batch_size=flags.batch_size,max_tec=flags.max_tec, n_iter=flags.n_iter, 
+            t=flags.t,num_proposal=flags.num_proposal, lik_sigma = std, verbose=True)
+    
+    # fill in zeros
+    tec_r = tec_ml.reshape((-1,Nt))
+    t = times.mjd*86400. - times[0].mjd*86400.
+    tec_in = []
+    for i in range(tec_r.shape[0]):
+        mask = tec_r[i,:] == 0.
+        if not np.any(mask):
+            tec_in.append(tec_r[i,:])
+            continue
+        nmask = np.bitwise_not(mask)
+        if not np.any(nmask):
+            tec_in.append(tec_r[i,:])
+            continue
+        tec_in.append(np.interp(t, t[nmask], tec_r[i,nmask]))
+    tec_ml = np.stack(tec_in,axis=0).reshape((Npol,Nd,Na,Nt))
+
+
+    ###
+    # essentially removed noise, any wraps should be trivial to solve
+    tec_ml = tec_ml.reshape((Npol, Nd, Na, Nt))
+    # Npol, Nd, Na, Nf, Nt
+    phase_pred = np.unwrap(tec_ml[...,None,:]*(-8.4480e9/freqs[:,None]), axis=-1)
+    
+    tec_post = phase_pred*(freqs[:,None]/-8.4480e9)
+    # average out frequencies
+    # Npol, Nd, Na ,Nt
+    tec_mu = np.mean(tec_post,axis=-2)
+    tec_var = np.var(tec_post,axis=-2)
+
+    #Npol,Nd, Na, Nf, Nt
+    def _wrap(phi):
+        return np.angle(np.exp(1j*phi))
+    phase_var = np.square(_wrap(_wrap(phase_)-_wrap(phase_pred)))
+
+    
     with datapack:
-        tec_ml = tec_ml.reshape((Npol, Nd, Na, Nt))
-        sigma_ml = sigma_ml.reshape((Npol, Nd, Na, Nt))
-        datapack.tec = tec_ml
-        datapack.weights_tec = 1./np.square(sigma_ml)
-        #Npol,Nd, Na, Nf, Nt
-        phase_pred = tec_ml[...,None,:]*(-8.4480e9/freqs[:,None])
-        def _wrap(phi):
-            return np.angle(np.exp(1j*phi))
-        phase_error = np.abs(_wrap(_wrap(phase_)-_wrap(phase_pred)))
-        datapack.weight_phase = 1./np.square(phase_error)
+        
+        datapack.tec = tec_mu
+        datapack.weights_tec = 1./tec_var
+        datapack.weight_phase = 1./phase_var
 
     
 def add_args(parser):
@@ -126,15 +166,15 @@ def add_args(parser):
     optional.add_argument("--solset", type=str, default='sol000',
             help="The solset with input phase, solutions will go into tec tab and phase/weights")
 
-    optional.add_argument("--batch_size", type=int, default=10000,
+    optional.add_argument("--batch_size", type=int, default=100000,
                        help="""The batch size of solve.""")
-    optional.add_argument("--max_tec", type=float, default=0.4,
+    optional.add_argument("--max_tec", type=float, default=0.25,
                        help="""Max TEC abs TEC scale > 0.""")
     optional.add_argument("--n_iter", type=int, default=25, 
                       help="How many iterations to run")
     optional.add_argument("--num_proposal", type=int, default=100, 
                       help="How many proposals per iteration")
-    optional.add_argument("--t", type=float, default=1.,
+    optional.add_argument("--t", type=float, default=0.05,
                        help="""Exploration parameter > 0, higher is more exploratory.""")
    # network
     optional.add_argument("--ant_sel", type="ant_sel", default=None, 
