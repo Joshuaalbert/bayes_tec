@@ -37,46 +37,46 @@ def run_solve(flags):
     tec_ml, sigma_ml = solve_ml_tec(phase, freqs, batch_size=flags.batch_size,max_tec=flags.max_tec, n_iter=flags.n_iter, 
             t=flags.t,num_proposal=flags.num_proposal, lik_sigma = std, verbose=True)
     
-    # fill in zeros
-    tec_r = tec_ml.reshape((-1,Nt))
-    t = times.mjd*86400. - times[0].mjd*86400.
-    tec_in = []
-    for i in range(tec_r.shape[0]):
-        mask = tec_r[i,:] == 0.
-        if not np.any(mask):
-            tec_in.append(tec_r[i,:])
-            continue
-        nmask = np.bitwise_not(mask)
-        if not np.any(nmask):
-            tec_in.append(tec_r[i,:])
-            continue
-        tec_in.append(np.interp(t, t[nmask], tec_r[i,nmask]))
-    tec_ml = np.stack(tec_in,axis=0).reshape((Npol,Nd,Na,Nt))
+#    # fill in zeros
+#    tec_r = tec_ml.reshape((-1,Nt))
+#    t = times.mjd*86400. - times[0].mjd*86400.
+#    tec_in = []
+#    for i in range(tec_r.shape[0]):
+#        mask = tec_r[i,:] == 0.
+#        if not np.any(mask):
+#            tec_in.append(tec_r[i,:])
+#            continue
+#        nmask = np.bitwise_not(mask)
+#        if not np.any(nmask):
+#            tec_in.append(tec_r[i,:])
+#            continue
+#        tec_in.append(np.interp(t, t[nmask], tec_r[i,nmask]))
+#    tec_ml = np.stack(tec_in,axis=0).reshape((Npol,Nd,Na,Nt))
+#
+#
+#    ###
+#    # essentially removed noise, any wraps should be trivial to solve
+#    tec_ml = tec_ml.reshape((Npol, Nd, Na, Nt))
+#    # Npol, Nd, Na, Nf, Nt
+#    phase_pred = np.unwrap(tec_ml[...,None,:]*(-8.4480e9/freqs[:,None]), axis=-1)
+#    
+#    tec_post = phase_pred*(freqs[:,None]/-8.4480e9)
+#    # average out frequencies
+#    # Npol, Nd, Na ,Nt
+#    tec_mu = np.mean(tec_post,axis=-2)
+#    tec_var = np.var(tec_post,axis=-2)
 
-
-    ###
-    # essentially removed noise, any wraps should be trivial to solve
-    tec_ml = tec_ml.reshape((Npol, Nd, Na, Nt))
-    # Npol, Nd, Na, Nf, Nt
-    phase_pred = np.unwrap(tec_ml[...,None,:]*(-8.4480e9/freqs[:,None]), axis=-1)
-    
-    tec_post = phase_pred*(freqs[:,None]/-8.4480e9)
-    # average out frequencies
-    # Npol, Nd, Na ,Nt
-    tec_mu = np.mean(tec_post,axis=-2)
-    tec_var = np.var(tec_post,axis=-2)
-
-    #Npol,Nd, Na, Nf, Nt
-    def _wrap(phi):
-        return np.angle(np.exp(1j*phi))
-    phase_var = np.square(_wrap(_wrap(phase_)-_wrap(phase_pred)))
+#    #Npol,Nd, Na, Nf, Nt
+#    def _wrap(phi):
+#        return np.angle(np.exp(1j*phi))
+#    phase_var = np.square(_wrap(_wrap(phase_)-_wrap(phase_pred)))
 
     
     with datapack:
         
-        datapack.tec = tec_mu
-        datapack.weights_tec = 1./tec_var
-        datapack.weight_phase = 1./phase_var
+        datapack.tec = tec_ml#tec_mu
+        datapack.weights_tec = 1./sigma_ml**2#tec_var
+#        datapack.weight_phase = 1./phase_var
 
     
 def add_args(parser):

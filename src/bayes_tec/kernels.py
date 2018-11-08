@@ -1,5 +1,7 @@
 import tensorflow as tf
 import numpy as np
+import pylab as plt
+plt.style.use('ggplot')
 
 from gpflow import transforms
 from gpflow import settings
@@ -12,6 +14,92 @@ from bayes_tec.utils.stat_utils import log_normal_solve
 from gpflow.priors import LogNormal
 
 from .logging import logging
+
+class SpectralMixture(Kernel):
+    """
+    SM(t) = sum_q w_q exp[-2 pi**2 |t**2/v_q| ] prod_p cos[2 pi |t(p)/mu_q(p)|]
+    """
+    def __init__(self, dims, w, v, mu, active_dims=None, name=None):
+        super().__init__(dims, active_dims, name=name)
+        self.Q, self.P = v.shape
+        self.w = Parameter(w,#Q
+                dtype=settings.float_type,
+                trainable=True,
+                transform = transforms.positive)
+        self.v = Parameter(v,#Q,P
+                dtype=settings.float_type,
+                trainable=True,
+                transform=transforms.positive)#inverse lengthscale**2
+        self.mu = Parameter(mu,#Q,P
+                dtype=settings.float_type,
+                trainable=True)# inverse periods (symmetry means make it positive
+
+    @params_as_tensors
+    def K(self, X, X2=None, presliced=False):
+        if not presliced:
+            X, X2 = self._slice(X, X2)
+        se_scale = (2*np.pi)*self.v#Q, P
+        se_X  = se_scale[:, None, :] * X[None, :, :]#Q, N, P
+        cos_scale = (2*np.pi)*self.mu#Q, P
+        cos_X  = tf.tensordot(cos_scale, X, axes=[[1],[1]])#Q, N
+        se_X2 = None
+        cos_X2 = cos_X
+        if X2 is not None:
+            se_X2 = se_scale[:, None, :] * X2[None, :, :]#Q, M, P
+            cos_X2 = tf.tensordot(cos_scale, X2, axes=[[1],[1]])#Q, M
+
+        r2 = self.scaled_square_dist_batched(se_X,se_X2)#Q, N, M
+        # tau = X_NP * mu_QP - X2_MP * mu_QP
+        #Q N M
+        tau = cos_X[:, :, None] -  cos_X2[:,None, :]
+        k =  tf.reduce_sum(self.w[:, None, None] * tf.exp(-0.5*r2) * tf.cos(tau), axis=0)
+        return k
+
+    @params_as_tensors
+    def Kdiag(self, X, presliced=False):
+        return tf.fill(tf.stack([tf.shape(X)[0]]), tf.reduce_sum(self.w))
+
+    @params_as_tensors    
+    def scaled_square_dist_batched(self,X, X2):
+        """
+        X: tensor B, N, D
+        X2: tensor B, M, D (or 1, M, D) and will be broadcast to B, M ,D
+        Return:
+        tensor B, N, M
+        """
+        # Clipping around the (single) float precision which is ~1e-45.
+#        X = X / lengthscales
+        Xs = tf.reduce_sum(tf.square(X), axis=2)#B,N
+
+        if X2 is None:
+            dist = -2.*tf.matmul(X,X,transpose_b=True)
+            dist += Xs[:,:,None] + Xs[:,None,:]
+            return tf.maximum(dist, 1e-40)
+
+#        X2 = X2 / lengthscales# B (1), M, D
+        X2s = tf.reduce_sum(tf.square(X2), axis=2)# B (1), M 
+        dist = -2 * tf.matmul(X, X2, transpose_b=True)
+        dist += Xs[:,:,None] + X2s[:,None,:]
+        return tf.maximum(dist, 1e-40)
+
+    def plot_spectrum(self, save_fig=None, show=True, dim = 0,  yscale='log'):
+        max_freq = np.max(self.mu.value[:,dim]) + 10.*np.max(np.sqrt(self.v.value[:,dim]))
+        freqs = np.linspace(0., max_freq, 1000)
+        S = np.zeros(1000)
+
+        for (w,v,mu) in zip(self.w.value, self.v.value[:,dim], self.mu.value[:,dim]): 
+            S += w*np.exp(-(freqs - mu)**2/2./v) / np.sqrt(2*np.pi*v)
+
+        plt.plot(freqs, S)
+        plt.xlabel('freq [1/sample]')
+        plt.ylabel('spectrum [1]')
+        plt.yscale(yscale)
+        if save_fig is not None:
+            plt.savefig(save_fig)
+            plt.close('all')
+        else:
+            plt.show()
+
 
 class ThinLayer(Kernel):
     """

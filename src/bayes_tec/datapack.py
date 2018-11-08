@@ -432,6 +432,11 @@ class DataPack(object):
             object.__setattr__(self, tab, value)
         
     def select(self,**selection):
+#        for key,item in selection.items():
+#            if key.startswith('not_'):
+#                flags = item.split('|')
+#                selection[key.split("not_")[1]] = "^(" + "".join(["((?!{}))".format(f) for f in flags]) + ".)*$"
+#                del selection[key]
         self._selection = selection
         
     def select_all(self):

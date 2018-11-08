@@ -3,7 +3,7 @@ from gpflowopt.domain import ContinuousParameter, UnitCube
 from .mgf import MomentGeneratingFunctionImprovement
 
 import gpflow as gp                                                                                                                                                                
-from gpflowopt.design import LatinHyperCube                                                                                                                                        
+from gpflowopt.design import LatinHyperCube, FactorialDesign                                                                                                                         
 from gpflowopt.acquisition import ExpectedImprovement                                                                                                                              
 from gpflowopt import optim, BayesianOptimizer                                                                                                                                     
 import h5py                                                                                                                                                                        
@@ -15,9 +15,9 @@ import pylab as plt
 plt.style.use('ggplot')
                                                                                                                                                                                    
 class BayesHPOpt(object):                                                                                                                                                          
-    def __init__(self, objectivefx, fit_params = {}, folds=3, n_jobs=1, init = None, t=0.5, first_tries=None):   
+    def __init__(self, objectivefx, fit_params = {}, folds=3, n_jobs=1, init = None, t=0.5,kw_params=True):
+        self.kw_params=kw_params
         self.t=t
-        self.first_tries = np.array(first_tries)
         self.folds = 3                                                                                                                                                             
         self.n_jobs = 1                                                                                                                                                            
         self._objectivefx = objectivefx                                                                                                                                            
@@ -75,9 +75,11 @@ class BayesHPOpt(object):
         self.domain_type.append('bin')
         self.domain.append(ContinuousParameter(name,0,1))
 
-    def _objective(self,**kwargs):
-        y = self._objectivefx(**kwargs)
-        return y
+    def _objective(self,kwargs):
+        if self.kw_params:
+            return self._objectivefx(**kwargs)
+
+        return self._objectivefx(kwargs)
 
 
     def get_kwargs(self, params):
@@ -97,19 +99,22 @@ class BayesHPOpt(object):
     def objective(self, params):
         logging.warning("=== Starting iteration {} ===".format(self.iter))
         params = params.flatten()
-        args = {}
-        for c,p,t in zip(self.domain, params, self.domain_type):
-            if t == 'log':
-                args[c.label] = np.exp(p)
-            elif t == 'bin':
-                args[c.label] = 1. if np.random.uniform() < p else 0.
-            elif t == 'int':
-                args[c.label] = int(p)
-            else:
-                args[c.label] = p
-        logging.warning("Running with {}".format(args))
         self.X.append(params)
-        y = self._objective(**args) # scalar
+        if self.kw_params:
+            args = {}
+            for c,p,t in zip(self.domain, params, self.domain_type):
+                if t == 'log':
+                    args[c.label] = np.exp(p)
+                elif t == 'bin':
+                    args[c.label] = 1. if np.random.uniform() < p else 0.
+                elif t == 'int':
+                    args[c.label] = int(p)
+                else:
+                    args[c.label] = p
+        else:
+            args = params
+        logging.warning("Running with {}".format(args))
+        y = self._objective(args) # scalar
         self.Y.append(np.array([y]))
         self.save(self.save_path, True)
         logging.warning("=== Result {} ===".format(self.iter))
@@ -147,7 +152,7 @@ class BayesHPOpt(object):
         plt.ylim(ylim[0],np.max(np.minimum.accumulate(f)) + 0.5*(np.max(np.minimum.accumulate(f)) - np.min(f)))
         plt.show()
 
-    def run(self, save_path, init_design_size=1, n_iter=24, plot=False, likelihood_uncert=1.):
+    def run(self, save_path, init_design_size=1, n_iter=24, plot=False, likelihood_uncert=1.,design = None):
         self.save_path = save_path
         self.iter = 0
         
@@ -162,7 +167,10 @@ class BayesHPOpt(object):
 #            self.X = self.X + list(self.first_tries)
 
         if init_design_size > 0:
-            design = LatinHyperCube(init_design_size,domain)
+            if design == 'latin':
+                design = LatinHyperCube(init_design_size,domain)
+            if design == 'fac':
+                design = FactorialDesign(2, domain)
             X = list(design.generate())
             Y = [self.objective(x).flatten() for x in X]
             self.Y = self.Y + Y
@@ -184,8 +192,9 @@ class BayesHPOpt(object):
             kern = gp.kernels.Matern52(domain.size, ARD=True)# + gp.kernels.White(domain.size)
             m = gp.models.GPR(np.stack(self.X,axis=0), np.stack(self.Y,axis=0), kern)
             lik_var = log_normal_solve(likelihood_uncert**2, 0.5*likelihood_uncert**2)
-            m.likelihood.variance = np.exp(lik_var[0])
+            m.likelihood.variance = likelihood_uncert**2#np.exp(lik_var[0])
             m.likelihood.variance.prior = gp.priors.LogNormal(lik_var[0], lik_var[1]**2)
+            m.likelihood.variance.trainable = False
             m.compile()
         self.ei = MomentGeneratingFunctionImprovement(m, self.t)
         opt = optim.StagedOptimizer([optim.MCOptimizer(domain, 5000), optim.SciPyOptimizer(domain)])

@@ -624,6 +624,7 @@ def plot_solution_residuals(datapack, output_folder, data_solset='sol000', solut
                     
 
                         mean = res[p,d,a,:,:].mean(0)
+                        t = np.arange(len(times))
                         ax2.plot(times.mjd*86400, mean,label=r'$\mathbb{E}_\nu[\delta\phi]$')
                         std = res[p,d,a,:,:].std(0)
                         ax2.fill_between(times.mjd*86400, mean - std, mean + std,alpha=0.5,label=r'$\pm\sigma_{\delta\phi}$')

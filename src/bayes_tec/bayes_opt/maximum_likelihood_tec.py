@@ -101,7 +101,7 @@ def likelihood(tec, phase, tec_conversion, lik_sigma, K = 2):
     tec: tensor B, 1
     phase: tensor B, Nf
     tec_conversion: tensor Nf
-    lik_sigma: tensor B, 1
+    lik_sigma: tensor B, 1 (Nf)
     Returns:
     log_prob: tensor (B,1)
     """
@@ -116,18 +116,18 @@ def likelihood(tec, phase, tec_conversion, lik_sigma, K = 2):
     
     
     # B, 1
-    tec_prior = tf.distributions.Normal(
-        tf.convert_to_tensor(0.,dtype=float_type),
-        tf.convert_to_tensor(0.5,dtype=float_type)).log_prob(tec)
+#    tec_mu = tf.gather(tec, neighbour)
+#    tec_std = 0.001 * tf.exp(-0.25*neighbour_dist**2)
+#    tec_prior = tf.distributions.Normal(tec_mu, tec_std).log_prob(tec)
     
-    sigma_priors = log_normal_solve(0.2,0.1)
-    #B, 1
-    sigma_prior = tf.distributions.Normal(
-        tf.convert_to_tensor(sigma_priors[0],dtype=float_type), 
-        tf.convert_to_tensor(sigma_priors[1],dtype=float_type)).log_prob(tf.log(lik_sigma)) - tf.log(lik_sigma)
+#    sigma_priors = log_normal_solve(0.2,0.1)
+#    #B, 1
+#    sigma_prior = tf.distributions.Normal(
+#        tf.convert_to_tensor(sigma_priors[0],dtype=float_type), 
+#        tf.convert_to_tensor(sigma_priors[1],dtype=float_type)).log_prob(tf.log(lik_sigma)) - tf.log(lik_sigma)
     
     #B, 1
-    log_prob = log_lik[:,None] + tec_prior + sigma_prior
+    log_prob = log_lik[:,None]# + tec_prior # + sigma_prior
     
     return -log_prob
 
@@ -176,8 +176,7 @@ def bayes_opt_iter(phase, tec_conversion, X, Y, jitter = 1e-6, num_proposal=100,
     # proposal array
     tec_array = tf.cast(tf.linspace(-max_tec, max_tec, num_proposal), dtype=float_type)
     
-    lik_log_sigma = tf.zeros(shape=tf.concat([tf.shape(phase)[0:1], tf.constant([1])],axis=0), dtype=float_type)
-    lik_sigma = lik_sigma*tf.exp(lik_log_sigma)
+    lik_sigma = lik_sigma#*tf.ones(shape=tf.concat([tf.shape(phase)[0:1], tf.constant([1])],axis=0), dtype=float_type)
 
     Xstar = tf.tile(tec_array[None,:,None], tf.concat([tf.shape(X)[0:1], tf.constant([1, 1])],axis=0))# B, M, D
     grid_size = 2*max_tec/tf.cast((num_proposal-1),dtype=float_type)
@@ -207,19 +206,22 @@ def bayes_opt_iter(phase, tec_conversion, X, Y, jitter = 1e-6, num_proposal=100,
     
     return BayesOptReturn(X, Y, aq, fmean, fvar)
 
-def solve_ml_tec(phase, freqs, batch_size=1000, max_tec=0.3, num_proposal=100, n_iter = 21, init_pop = 5, t=0.5, verbose=False,K=2):
+def solve_ml_tec(phase, freqs, batch_size=1000, max_tec=0.3, num_proposal=100, n_iter = 21, init_pop = 5, t=0.05, lik_sigma=0.3, verbose=False,K=2):
+
+    like_sigma = np.ones_like(phase)*lik_sigma
     tec_conversion = -8.448e9/freqs
     with tf.Session(graph=tf.Graph()) as sess:
         phase_pl = tf.placeholder(float_type)
         tec_conversion_pl = tf.placeholder(float_type)
         t_pl = tf.placeholder(float_type)
+        lik_sigma_pl = tf.placeholder(float_type)
 
         X_init, Y_init = init_population(phase_pl,tec_conversion_pl,N=init_pop,K=K)
         Xcur, Ycur = X_init, Y_init
         X_,Y_,aq_,fmean_,fvar_ = [],[],[],[],[]
         for i in range(n_iter):
             res = bayes_opt_iter(phase_pl, tec_conversion_pl, Xcur, Ycur,
-                                 num_proposal=num_proposal, t = t_pl*(1.  + ((0.01 - t_pl)/float(n_iter)) * i), max_tec = max_tec,K=K)
+                                 num_proposal=num_proposal, t = t_pl*(1.  + ((0.01 - t_pl)/float(n_iter)) * i), lik_sigma=lik_sigma_pl, max_tec = max_tec,K=K)
             X_.append(res.X)
             Y_.append(res.Y)
             aq_.append(res.aq)
@@ -238,6 +240,7 @@ def solve_ml_tec(phase, freqs, batch_size=1000, max_tec=0.3, num_proposal=100, n
         out_tec, out_sigma = [],[]
         for i in range(0,phase.shape[0], batch_size):
             phase_batch = phase[i:min(i+batch_size,phase.shape[0]), :]
+            lik_sigma_batch = lik_sigma[i:min(i+batch_size,phase.shape[0]), :]
             # get results
             if verbose:
                 t0 = default_timer()
@@ -245,6 +248,7 @@ def solve_ml_tec(phase, freqs, batch_size=1000, max_tec=0.3, num_proposal=100, n
 
             _tec, _sigma = sess.run([tec_min, phase_sigma],
                                              feed_dict={t_pl:t,
+                                                        lik_sigma_pl:lik_sigma_batch,
                                                         phase_pl:phase_batch,
                                                         tec_conversion_pl:tec_conversion})
             if verbose:

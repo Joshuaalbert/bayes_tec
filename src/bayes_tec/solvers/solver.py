@@ -31,7 +31,7 @@ class Solver(object):
             datapack = DataPack(datapack)
         self.datapack = datapack
 
-    def solve(self, output_solset='posterior_sol', load_model=None, return_likelihood=False, **kwargs):
+    def solve(self, output_solset='posterior_sol', load_model=None, return_likelihood=False, compute_posterior=True, **kwargs):
         """Run the solver"""
         logging.info("Starting solve")
         self.output_solset = output_solset
@@ -68,27 +68,28 @@ class Solver(object):
             logging.info("Loading trained model")
             self._load_model(model, saved_model)
             
-            logging.info("Predicting posterior at data coords")
-            ystar, varstar = [], []
-            for X in self._posterior_coords(self.datapack, screen=False, **kwargs):
-                _ystar, _varstar = self._predict_posterior(model, X)
-                ystar.append(_ystar)
-                varstar.append(_varstar)
-            ystar = np.concatenate(ystar, axis=0)
-            varstar = np.concatenate(varstar, axis=0)
-            logging.info("Saving posterior at data coords")
-            self._save_posterior(ystar, varstar, self.datapack, data_shape, screen=False, **kwargs)
-            
-            logging.info("Predicting posterior over screen")
-            ystar, varstar = [], []
-            for X in self._posterior_coords(self.datapack, screen=True, **kwargs):
-                _ystar, _varstar = self._predict_posterior(model, X)
-                ystar.append(_ystar)
-                varstar.append(_varstar)
-            ystar = np.concatenate(ystar, axis=0)
-            varstar = np.concatenate(varstar, axis=0)
-            logging.info("Saving posterior over screen")
-            self._save_posterior(ystar, varstar, self.datapack, data_shape, screen=True, **kwargs)
+            if compute_posterior:
+                logging.info("Predicting posterior at data coords")
+                ystar, varstar = [], []
+                for X in self._posterior_coords(self.datapack, screen=False, **kwargs):
+                    _ystar, _varstar = self._predict_posterior(model, X)
+                    ystar.append(_ystar)
+                    varstar.append(_varstar)
+                ystar = np.concatenate(ystar, axis=0)
+                varstar = np.concatenate(varstar, axis=0)
+                logging.info("Saving posterior at data coords")
+                self._save_posterior(ystar, varstar, self.datapack, data_shape, screen=False, **kwargs)
+                
+                logging.info("Predicting posterior over screen")
+                ystar, varstar = [], []
+                for X in self._posterior_coords(self.datapack, screen=True, **kwargs):
+                    _ystar, _varstar = self._predict_posterior(model, X)
+                    ystar.append(_ystar)
+                    varstar.append(_varstar)
+                ystar = np.concatenate(ystar, axis=0)
+                varstar = np.concatenate(varstar, axis=0)
+                logging.info("Saving posterior over screen")
+                self._save_posterior(ystar, varstar, self.datapack, data_shape, screen=True, **kwargs)
 
             logging.info("Finalize routines")
             self._finalize(self.datapack, **kwargs)

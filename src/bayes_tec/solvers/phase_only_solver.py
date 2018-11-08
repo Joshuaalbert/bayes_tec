@@ -7,7 +7,7 @@ import tensorflow as tf
 from gpflow import settings
 import gpflow as gp
 
-from ..utils.data_utils import calculate_weights, make_coord_array
+from ..utils.data_utils import calculate_weights, make_coord_array, calculate_empirical_W,calculate_empirical_spectral_kern
 import astropy.units as au
 import astropy.coordinates as ac
 import astropy.time as at
@@ -16,15 +16,15 @@ from ..frames import ENU
 import uuid
 import h5py
 from ..utils.stat_utils import log_normal_solve, log_normal_solve_fwhm
-from ..utils.gpflow_utils import train_with_nat_and_adam, train_with_adam, SendSummary, SaveModel, Reshape, MatrixSquare
-from ..likelihoods import WrappedPhaseGaussianEncodedHetero
-from ..kernels import ThinLayer
+from ..utils.gpflow_utils import train_with_nat_and_adam, train_with_adam, train_with_nat, SendSummary, SaveModel, Reshape, MatrixSquare, RescaleVec, LogisticVec
+from ..likelihoods import WrappedPhaseGaussianEncodedHetero, ItohGaussianEncodedHetero, ComplexHarmonicPhaseOnlyGaussianEncodedHetero
+from ..kernels import SpectralMixture
 from ..frames import ENU
 from ..models.heteroscedastic_phaseonly_svgp import HeteroscedasticPhaseOnlySVGP
 from scipy.cluster.vq import kmeans2   
 from gpflow.priors import LogNormal, Gaussian
 from gpflow.mean_functions import Constant, Zero
-from gpflow.kernels import Matern52, Matern32, White, RBF
+from gpflow.kernels import Matern52, Matern32, White, RBF, Bias
 from gpflow.features import InducingPoints
 from gpflow import defer_build
 import gpflow.multioutput.kernels as mk
@@ -34,6 +34,7 @@ from ..bayes_opt.maximum_likelihood_tec import solve_ml_tec
 from timeit import default_timer
 from ..bayes_opt.maximum_likelihood_tec import solve_ml_tec
 from ..plotting.plot_datapack import animate_datapack, plot_data_vs_solution, plot_freq_vs_time,plot_solution_residuals
+from collections import namedtuple
 
 class PhaseOnlySolver(Solver):
     def __init__(self,run_dir, datapack):
@@ -66,10 +67,11 @@ class PhaseOnlySolver(Solver):
 
             
             # plot 2D posterior000/tec000 to phase at central freq
-            animate_datapack(datapack,os.path.join(self.plot_dir,"posterior_phase_2D"),None,
+            animate_datapack(datapack,os.path.join(self.plot_dir,"posterior_phase_2D_screen"),None,
                     ant_sel=ant_sel,time_sel=time_sel,freq_sel=freq_sel,pol_sel=pol_sel,dir_sel=dir_sel,
                     plot_crosses=True, labels_in_radec=True, observable='tec',phase_wrap=True,
-                    solset=self.output_solset,tec_eval_freq=eval_freq)
+                    solset=self.output_screen_solset,tec_eval_freq=eval_freq, plot_screen=True)
+
         if plot_level == 1:
 
             # plot 2D sol000/phase000 at central freq
@@ -147,8 +149,6 @@ class PhaseOnlySolver(Solver):
             # store relevant piece
             time_sel = posterior_save_settings.get('save_time_sel', time_sel)
             subset_slice = posterior_save_settings.get('subset_slice',slice(None,None,1))
-            logging.debug(time_sel)
-            logging.debug(subset_slice)
 
             if screen:
                 #datapack.switch_solset(self.output_screen_solset)
@@ -190,9 +190,9 @@ class PhaseOnlySolver(Solver):
         Returns the saved model.
         """
 
-#        train_with_adam(model, learning_rate, iterations, [SendSummary(model,writer,write_period=10)])#, SaveModel(save_folder, save_period=1000)])
-        var_list = [[model.q_mu, model.q_sqrt]]# + [feat.Z for feat in model.feature.feat_list]]
-        train_with_nat_and_adam(model, iterations=iterations, callback=[SendSummary(model,writer,write_period=10)], **kwargs)#, SaveModel(save_folder, save_period=1000)])
+        train_with_adam(model, iterations, [SendSummary(model,writer,write_period=10)], **kwargs)#, SaveModel(save_folder, save_period=1000)])
+#        var_list = [[model.q_mu, model.q_sqrt]]# + [feat.Z for feat in model.feature.feat_list]]
+#        train_with_nat_and_adam(model, iterations=iterations, callback=[SendSummary(model,writer,write_period=10)], **kwargs)#, SaveModel(save_folder, save_period=1000)])
         save_path = os.path.join(save_folder,'model.hdf5')
         logging.info("Saving model {}".format(save_path))
         self._save_model(model, save_path)
@@ -219,47 +219,51 @@ class PhaseOnlySolver(Solver):
             for name, value in vars.items():
                 f[name] = value
 
-    def _build_kernel(self, kern_ls_lower=0.75, kern_ls_upper=1.25, kern_dir_ls=0.5, kern_time_ls=50., kern_var=1., include_time=True, include_dir=True, **priors):
+    def _build_kernel(self, w, mu, v, kern_var, Fs = np.array([np.sqrt(45)/2.5, np.sqrt(45)/2.5, 1./8.]), **priors):
 
         kern_var = 1. if kern_var == 0. else kern_var
 
-        kern_dir = RBF(2,active_dims=slice(0,2,1))
+#        ## 
+#        # time
+#        kern_time = SpectralMixture(1, w, v[:,None], mu[:,None], active_dims=slice(2,3,1))
+#        kern_time.w.transform = RescaleVec(w)(gp.transforms.positive)
+#        kern_time.v.transform = RescaleVec(v[:,None])(gp.transforms.positive)
+#        kern_time.mu.transform = gp.transforms.Logistic(-1e-6, Fs[2])(RescaleVec(mu[:,None]))
+#        kern_time.w.trainable = False
+#        kern_time.mu.trainable = False
+#        kern_time.v.trainable = False
+
+        kern_dir = Matern52(2,lengthscales=1., variance=1.,active_dims=slice(0,2,1))
+        kern_dir.lengthscales.trainable = False
         kern_dir.variance.trainable = False
-        
-        kern_dir.lengthscales = kern_dir_ls
-        kern_dir_ls = log_normal_solve_fwhm(kern_dir_ls*kern_ls_lower, kern_dir_ls*kern_ls_upper, D=0.1)#kern_dir_ls, 0.5*kern_dir_ls)
-        kern_dir.lengthscales.prior = LogNormal(kern_dir_ls[0], kern_dir_ls[1]**2)
-        kern_dir.lengthscales.trainable = True
 
-        kern_time = RBF(1,active_dims=slice(2,3,1))
-        
-        kern_time.variance = kern_var
-        kern_var = log_normal_solve_fwhm(kern_var*kern_ls_lower, kern_var*kern_ls_upper, D=0.1)#log_normal_solve(kern_var,0.5*kern_var)
-        kern_time.variance.prior = LogNormal(kern_var[0], kern_var[1]**2)
-        kern_time.variance.trainable = True
+        kern_time = Matern52(1,lengthscales=50., variance=1.,active_dims=slice(2,3,1))
+        kern_time.lengthscales.trainable = False
+        kern_time.lengthscales.transpose = gp.transforms.Rescale(50.)(gp.transforms.positive)
+        kern_time.variance.trainable = False
 
-        kern_time.lengthscales = kern_time_ls
-        kern_time_ls = log_normal_solve_fwhm(kern_time_ls*kern_ls_lower, kern_time_ls*kern_ls_upper, D=0.1)#kern_time_ls, 0.5*kern_time_ls)
-        kern_time.lengthscales.prior = LogNormal(kern_time_ls[0], kern_time_ls[1]**2)
-        kern_time.lengthscales.trainable = True
 
-        kern_white = gp.kernels.White(3)
-        kern_white.variance = 1.
-        kern_white.variance.trainable = False#True
 
-        if include_time:
-            if include_dir:
-                return kern_dir*kern_time
-            return kern_time
-        else:
-            if include_dir:
-                kern_dir.variance.trainable = True
-                return kern_dir
-            return kern_white
+#        kernels = []
+#        for p in range(w.shape[1]):
+#            kernels.append(SpectralMixture(1, w[:,p], v[:,p:p+1], mu[:,p:p+1], active_dims=slice(p,p+1,1)))
+#            kernels[-1].w.transform = RescaleVec(w[:,p])(gp.transforms.positive)
+#            kernels[-1].v.transform = RescaleVec(v[:,p:p+1])(gp.transforms.positive)
+#            kernels[-1].mu.transform = gp.transforms.Logistic(-1e-6, Fs[p])(RescaleVec(mu[:,p:p+1]))
+#            kernels[-1].w.trainable = False
+#            kernels[-1].mu.trainable = False
+#            kernels[-1].v.trainable = False
 
-        return kern_dir*kern_time
+        kern_bias = Bias(3)
+#        kern_var = log_normal_solve_fwhm(kern_var*0.75, kern_var*1.5, D=0.1)
+        kern_bias.variance = 1.#kern_var
+#        kern_bias.variance.prior = LogNormal(kern_var[0], kern_var[1]**2)
+        kern_bias.variance.trainable = False
+        kern_bias.variance.transform = gp.transforms.positiveRescale(kern_var)
 
-    def _build_model(self, Y_var, freqs, dir_idx, X, Y, facet_weights=None, Z=None, q_mu = None, q_sqrt = None, M=None, P=None, L=None, W=None, num_data=None, jitter=1e-6, tec_scale=None, W_diag=False, **kwargs):
+        return  kern_time*kern_bias*kern_dir
+
+    def _build_model(self, Y_var, freqs, X, Y, kern_params=None, Z=None, q_mu = None, q_sqrt = None, M=None, P=None, L=None, W=None, num_data=None, jitter=1e-6, tec_scale=None, W_trainable=False, use_mc=False, **kwargs):
         """
         Build the model from the data.
         X,Y: tensors the X and Y of data
@@ -268,59 +272,51 @@ class PhaseOnlySolver(Solver):
         gpflow.models.Model
         """
 
-        
         settings.numerics.jitter = jitter
 
         with gp.defer_build():
             # Define the likelihood
-            likelihood = WrappedPhaseGaussianEncodedHetero(tec_scale=tec_scale, K=2)
+            likelihood = ComplexHarmonicPhaseOnlyGaussianEncodedHetero(tec_scale=tec_scale)
 #            likelihood.variance = 0.3**2#(5.*np.pi/180.)**2
 #            likelihood_var = log_normal_solve((5.*np.pi/180.)**2, 0.5*(5.*np.pi/180.)**2)
 #            likelihood.variance.prior = LogNormal(likelihood_var[0],likelihood_var[1]**2)
-#            likelihood.variance.transform = gp.transforms.Rescale(np.pi/180.)(gp.transforms.positive)
+#            likelihood.variance.transform = gp.transforms.positiveRescale(np.exp(likelihood_var[0]))
             likelihood.variance.trainable = False
 
 
             q_mu = q_mu/tec_scale #M, L
             q_sqrt = q_sqrt/tec_scale# L, M, M
 
-            kern = mk.SeparateMixedMok([self._build_kernel(kern_var = np.var(q_mu[:,l]), **kwargs.get("priors",{})) for l in range(L)], W)
 
-            if W_diag:
-#                kern.W.transform = Reshape(W.shape,(P,L,L))(gp.transforms.DiagMatrix(L)(gp.transforms.positive))
-                kern.W.trainable = False
-            else:
-#                kern.W.transform = Reshape(W.shape,(P//L,L,L))(MatrixSquare()(gp.transforms.LowerTriangular(L,P//L)))
-                kern.W.trainable = True
+
+            kern = mk.SeparateMixedMok([self._build_kernel(None, None, None, #kern_params[l].w, kern_params[l].mu, kern_params[l].v, 
+                kern_var = np.var(q_mu[:,l]), **kwargs.get("priors",{})) for l in range(L)], W)
+            kern.W.trainable = W_trainable
+            kern.W.prior = gp.priors.Gaussian(W, 0.01**2)
+
             
             feature = mf.MixedKernelSeparateMof([InducingPoints(Z) for _ in range(L)])
             mean = Zero()
-            model = HeteroscedasticPhaseOnlySVGP(Y_var, freqs, dir_idx, facet_weights, X, Y, kern, likelihood, 
+            model = HeteroscedasticPhaseOnlySVGP(Y_var, freqs, X, Y, kern, likelihood, 
                         feat = feature,
                         mean_function=mean, 
                         minibatch_size=None,
                         num_latent = P, 
                         num_data = num_data,
                         whiten = False, 
-                        q_mu = q_mu, 
-                        q_sqrt = q_sqrt, 
+                        q_mu = None, 
+                        q_sqrt = None, 
                         q_diag = False)
             for feat in feature.feat_list:
                 feat.Z.trainable = True #True
             model.q_mu.trainable = True
+            model.q_mu.prior = gp.priors.Gaussian(0., 0.05**2)
             model.q_sqrt.trainable = True
 #            model.q_sqrt.prior = gp.priors.Gaussian(0., (0.005/tec_scale)**2)
             model.compile()
             tf.summary.image('W',kern.W.constrained_tensor[None,:,:,None])
             tf.summary.image('q_mu',model.q_mu.constrained_tensor[None,:,:,None])
             tf.summary.image('q_sqrt',model.q_sqrt.constrained_tensor[:,:,:,None])
-#            tf.summary.image('facet_weights',model.facet_weights.constrained_tensor[None,:,None,None])
-
-            for i,feat in enumerate(feature.feat_list):
-                tf.summary.histogram('Z{}_ra'.format(i),feat.Z.constrained_tensor[:,0])
-                tf.summary.histogram('Z{}_dec'.format(i),feat.Z.constrained_tensor[:,1])
-                tf.summary.histogram('Z{}_time'.format(i),feat.Z.constrained_tensor[:,2])
-                    
 
             return model
 
@@ -343,13 +339,11 @@ class PhaseOnlySolver(Solver):
             Y_var = np.stack([Y_var_[i,...] for i in idx], axis=0)
             freqs_ = f['/data/freqs']
             freqs = np.stack([freqs_[i,...] for i in idx], axis=0)
-            dir_idx_ = f['/data/dir_idx']
-            dir_idx = np.stack([dir_idx_[i,...] for i in idx], axis=0)
 
             X_ = f['/data/X']
             X = np.stack([X_[i,...] for i in idx], axis=0)
 
-        return Y_var.astype(dtype), freqs.astype(dtype), dir_idx.astype(dtype), X.astype(dtype), Y.astype(dtype)
+        return Y_var.astype(dtype), freqs.astype(dtype), X.astype(dtype), Y.astype(dtype)
 
     def _get_soltab_coords(self, solset, soltab, ant_sel=None, time_sel=None, dir_sel=None, freq_sel=None, pol_sel=None, no_freq=False, **kwargs):
         """
@@ -399,6 +393,7 @@ class PhaseOnlySolver(Solver):
 
             # Npol, Nd, Na, Nf, Nt
             phase, axes = self.datapack.phase
+            amp, axes = self.datapack.amplitude
 
             antenna_labels, antennas = self.datapack.get_antennas(axes['ant'])
             patch_names, directions = self.datapack.get_sources(axes['dir'])
@@ -408,32 +403,37 @@ class PhaseOnlySolver(Solver):
             Npol, Nd, Na, Nf, Nt = len(pols), len(directions), len(antennas), len(freqs), len(times)
 
 
-            # Npol, Nd, Na, Nt
-            tec, _ = self.datapack.tec
-            def _wrap(phi):
-                return np.angle(np.exp(1j*phi))
-
-            # Npol, Nd, Na, Nf, Nt
-            phase_pred = tec[...,None,:]*(-8.4480e9/freqs[:,None])
-            Y_var = np.tile(np.mean(np.square(_wrap(_wrap(phase)-_wrap(phase_pred))), axis=-2, keepdims=True),(1,1,1,Nf,1))
-            Y_var = np.maximum((5*np.pi/180.)**2, Y_var)
-
-            Y_var[:,[3,9,10,11,12,16,17,27,31,35],:,:,:] += np.pi**2
+#            # Npol, Nd, Na, Nt
+#            tec, _ = self.datapack.tec
+#            def _wrap(phi):
+#                return np.angle(np.exp(1j*phi))
+#
+#            # Npol, Nd, Na, Nf, Nt
+#            phase_pred = tec[...,None,:]*(-8.4480e9/freqs[:,None])
+#            Y_var = np.tile(np.mean(np.square(_wrap(_wrap(phase)-_wrap(phase_pred))), axis=-2, keepdims=True),(1,1,1,Nf,1))
+#            Y_var = np.maximum((5*np.pi/180.)**2, Y_var)
+#            
+#
+#            
+##            Y_var[:,:,3,:,:] += 0.1**2
 
 #            if not self.datapack.readonly:
 #                self.datapack.weights_phase = 1./Y_var
             
             freqs = np.tile(freqs[None, None, None, :, None], (Npol, Nd, Na, 1, Nt))
-            dir_idx = np.arange(Nd)
-            dir_idx = np.tile(dir_idx[None,:,None, None, None], (Npol, 1, Na, Nf, Nt))
+
+            gains = amp * np.exp(1j*phase)
+            Y_var = calculate_weights(gains, indep_axis=-1, N=100, phase_wrap=False, min_uncert=0.01)
+            Y_var /= amp**2
+            # TODO ensure inf propagates well. Should be that kappa = 1./Y_var = 0.
+            Y_var[:,[3,9,10,11,12,16,17,27,31],:,:,:] = np.inf#100.**2#np.pi**2
 
             # Nd, Nf, Nt, Na,Npol
             Y = phase.transpose((1,3,4,2,0))
             Y_var = Y_var.transpose((1,3,4,2,0))
             freqs = freqs.transpose((1,3,4,2,0))
-            dir_idx = dir_idx.transpose((1,3,4,2,0))
 
-            return Y, Y_var, freqs, dir_idx
+            return Y, Y_var, freqs
 
     
     def _prepare_data(self,datapack,ant_sel=None, time_sel=None, dir_sel=None, freq_sel=None, pol_sel=None,reweight_obs=False, recalculate_coords=False, dof_ratio=40., weight_smooth_len=40, screen_res=30, solset='sol000',coord_file=None, posterior_time_sel = None, **kwargs):
@@ -485,7 +485,7 @@ class PhaseOnlySolver(Solver):
             #Nd, Nf, Nt, ndim
             X = self._get_soltab_coords(self.solset, self.soltab, ant_sel=ant_sel,time_sel=time_sel, dir_sel=dir_sel, freq_sel=freq_sel, pol_sel=pol_sel)
             #Nd, Nf, Nt, Na, Npol
-            Y, Y_var, freqs, dir_idx = self._get_soltab_data(self.solset, self.soltab, ant_sel=ant_sel,time_sel=time_sel, dir_sel=dir_sel, freq_sel=freq_sel, pol_sel=pol_sel)
+            Y, Y_var, freqs = self._get_soltab_data(self.solset, self.soltab, ant_sel=ant_sel,time_sel=time_sel, dir_sel=dir_sel, freq_sel=freq_sel, pol_sel=pol_sel)
 
              ###
             # input coords not thread safe
@@ -498,45 +498,50 @@ class PhaseOnlySolver(Solver):
                 f['/data/Y'] = Y.reshape((-1, P))
                 f['/data/Y_var'] = Y_var.reshape((-1, P))
                 f['/data/freqs'] = freqs.reshape((-1, P))
-                f['/data/dir_idx'] = dir_idx.reshape((-1, P))
 
-            self.model_input_num = 5
+                #self.length_scales = [np.std(X[..., [0,1]]), np.std(X[..., 2])]
+
+            self.model_input_num = 4
 
 
-            logging.info("Initializing sparse conditions: q_mu and q_sqrt")
+            logging.info("Initializing sparse conditions: q_mu and q_sqrt, W, and kernel spectrum")
             self.datapack.switch_solset(self.solset)
             self.datapack.select(ant=ant_sel,time=time_sel, dir=dir_sel, freq=freq_sel, pol=pol_sel)
             #Npol, Nd, Na, Nt
             tec, _ = self.datapack.tec
             tec_weights, _ = self.datapack.weights_tec
-            tec_std = np.sqrt(1./tec_weights)
-            tec_std = np.where(~np.isfinite(tec_std), 0.01, tec_std)
+
+#            W = np.tile(calculate_empirical_W(tec/0.005, 2)[None, :, :], (Npol, 1, 1)).reshape((P,L))
+            W = np.tile(np.eye(Na)[None, :,:], (Npol, 1,1)).reshape((P,L))
+            kern_params = None
+#            kern_params = calculate_empirical_spectral_kern(tec, times.mjd*86400. - times.mjd[0]*86400., np.array([directions.ra.deg, directions.dec.deg]).T)
+
+            #            tec_std = np.sqrt(1./tec_weights)
+#            tec_std = np.where(~np.isfinite(tec_std), 0.005, tec_std)
             #Npol, Nd, Na, Nt -> Nd, Na, Nt -> Nd, Nt, Na -> Nd*Nt, Na
-            tec = tec.mean(0).transpose((0,2,1)).reshape((-1, L))
-            tec_std = tec_std.max(0).transpose((0,2,1)).reshape((-1,L))
-#            tec_std = 0.01*np.ones_like(tec)
+            tec = tec[0,...].transpose((0,2,1)).reshape((-1, L))
+#            tec_std = tec_std.max(0).transpose((0,2,1)).reshape((-1,L))
+            tec_std = 0.01*np.ones_like(tec)
 
             idx = np.random.choice(Nd*Nt, size=M, replace=False)
             Z = X[:,0,:,:].reshape((-1,ndim))[idx,:]#M,D
+#            Z[:,[0,1]] += 0.05*np.random.normal(size=(M,2))
+#            Z[:,2] += 8.*np.random.normal(size=M)
             q_mu = tec[idx,:]#M, Na
             q_sqrt = np.stack([np.diag(tec_std[idx,l]) for l in range(L)],axis=0)#L, M, M
 
-            W = np.reshape(np.ones(Npol)[:,None,None]*np.eye(Na)[None, :,:],(P,L))
-
-            facet_weights = 0.01*np.ones(Nd)
-            facet_weights[[3,9,10,11,12,16,17,27,31,35]] = np.pi-0.01
                         
             data_shape = (Nd, Nf, Nt)
             build_params = {
                     'Z': Z,
                     'W': W,
+                    'kern_params': kern_params,
                     'q_mu': q_mu,
                     'q_sqrt': q_sqrt,
                     'M': M,
                     'P':P,
                     'L':L,
                     'num_data':num_data,
-                    'facet_weights':facet_weights
                     }
 
             return data_shape, build_params
