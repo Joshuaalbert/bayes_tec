@@ -1,3 +1,6 @@
+import os
+os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
+import tensorflow
 from bayes_tec.solvers.phase_only_solver import PhaseOnlySolver
 from bayes_tec.utils.data_utils import define_equal_subsets
 from bayes_tec.logging import logging
@@ -8,13 +11,13 @@ def test_new_solver():
 
 #    opt = {'initial_learning_rate': 0.0469346965745387, 'learning_rate_steps': 2.3379450095649053, 'learning_rate_decay': 2.3096977604598385, 'minibatch_size': 257, 'dof_ratio': 15.32485312998133, 'gamma_start': 1.749795137201838e-05, 'gamma_add': 0.00014740343452076625, 'gamma_mul': 1.0555893705407017, 'gamma_max': 0.1063958902418518, 'gamma_fallback': 0.15444066000616663}
     
-    opt = {'initial_learning_rate': 0.03, 'learning_rate_steps': 2.39, 'learning_rate_decay': 2.66, 'minibatch_size': 1024, 'dof_ratio': 7., 'gamma_start': 5e-05, 'gamma_add': 1e-4, 'gamma_mul': 1.04, 'gamma_max': 0.14, 'gamma_fallback': 0.1}
+    opt = {'initial_learning_rate': 0.03, 'learning_rate_steps': 2.39, 'learning_rate_decay': 2.66, 'minibatch_size': 1024, 'dof_ratio': 2., 'gamma_start': 5e-05, 'gamma_add': 1e-4, 'gamma_mul': 1.04, 'gamma_max': 0.14, 'gamma_fallback': 0.1}
 #    opt['priors'] = {'kern_time_ls': 42.20929516497659, 'kern_dir_ls': 0.36789336277387313}
 
 
-    datapack = '/net/lofar1/data1/albert/git/bayes_tec/scripts/data/killms_datapack_4.hdf5'
-    run_dir='run_dir_killms_gains'
-    output_solset = "posterior_sol_gains_Wcon"
+    datapack = '../../scripts/data/killms_datapack_4.hdf5'
+    run_dir='run_dir_killms'
+    output_solset = "posterior_sol"
 
     solver = PhaseOnlySolver(run_dir, datapack)
 
@@ -33,7 +36,7 @@ def test_new_solver():
 
         solver.solve(output_solset=output_solset, solset='sol000', jitter=1e-6, tec_scale=0.005, screen_res=30, remake_posterior_solsets=False,
                     iterations=400,intra_op_threads=0, inter_op_threads=0, ant_sel="RS*", dir_sel=slice(None,None,1), time_sel=time_sel,pol_sel=slice(0,1,1),debug=False, 
-                    W_trainable=True, freq_sel=slice(0,48,1), plot_level=-1, **opt)
+                    W_trainable=False, freq_sel=slice(0,48,1), plot_level=-1, **opt)
     
 #        solver.solve(output_solset=output_solset, solset='sol000', jitter=1e-6, tec_scale=0.005, screen_res=30, remake_posterior_solsets=False,
 #                   iterations=500, intra_op_threads=0, inter_op_threads=0, ant_sel="CS*", time_sel=time_sel,pol_sel=slice(0,1,1),debug=False, 

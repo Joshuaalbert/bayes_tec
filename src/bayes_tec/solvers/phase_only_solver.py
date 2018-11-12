@@ -306,7 +306,7 @@ class PhaseOnlySolver(Solver):
                         whiten = False, 
                         q_mu = None, 
                         q_sqrt = None, 
-                        q_diag = False)
+                        q_diag = True)
             for feat in feature.feat_list:
                 feat.Z.trainable = True #True
             model.q_mu.trainable = True
@@ -316,7 +316,7 @@ class PhaseOnlySolver(Solver):
             model.compile()
             tf.summary.image('W',kern.W.constrained_tensor[None,:,:,None])
             tf.summary.image('q_mu',model.q_mu.constrained_tensor[None,:,:,None])
-            tf.summary.image('q_sqrt',model.q_sqrt.constrained_tensor[:,:,:,None])
+#            tf.summary.image('q_sqrt',model.q_sqrt.constrained_tensor[:,:,:,None])
 
             return model
 
