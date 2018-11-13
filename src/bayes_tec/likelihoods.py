@@ -681,23 +681,17 @@ class ComplexHarmonicPhaseOnlyGaussianEncodedHetero(Likelihood):
         likelihoods (Gaussian, Poisson) will implement specific cases.
         """
 
-        if not self.analytic:
-
-            return ndiagquad(self.logp,
-                                 self.num_gauss_hermite_points,
-                                 Fmu, Fvar, Y=Y, Y_var=Y_var, freq=freq)
-        kappa = 1./Y_var
-         
-
-
-        offset = - kappa  -  tf.log(tf.math.bessel_i0e(kappa)) - 0.5*np.log(2*np.pi)#perfect for coupled K
         
+        kappa = 1./Y_var
+        A = self.tec_conversion / freq
+        norm = np.log(2*np.pi) + kappa  +  tf.log(tf.math.bessel_i0e(kappa))
+        
+
+
         #..., Nf   
 #        phase = self.tec_conversion * (Fmu / freq)
         
-        A = self.tec_conversion / freq
-
-        data_term = 0.5 * np.sqrt(2*np.pi) * tf.cos(Y) * tf.cos(A * Fmu) * tf.exp(A**2 * Fvar) / tf.sqrt(Fvar)
+        
 
 
-        return data_term + offset
+        return kappa * tf.cos(A*Fmu - Y) * tf.exp(-A**2 * Fvar / 2.) - norm
