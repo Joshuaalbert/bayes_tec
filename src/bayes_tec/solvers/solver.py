@@ -224,7 +224,7 @@ class Solver(object):
         data = data.repeat()#repeat and batch forever
         data = data.map(_random_coords)#indices compatible with data_shape
         data = data.map(lambda indices: \
-                tuple(tf.py_func(lambda indices: self._get_data(indices,data_shape),[indices], [settings.float_type]*self.model_input_num)))#Y_var, freqs, X, Y
+                tuple(tf.py_func(lambda indices: self._get_data(indices,data_shape),[indices], [settings.float_type]*self.model_input_num)),num_parallel_calls=5)#Y_var, freqs, X, Y
 
         iterator_tensor = data.make_initializable_iterator()
         if sess is not None:
