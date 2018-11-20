@@ -21,12 +21,6 @@ class DataPack(object):
         self.filename = os.path.abspath(filename)
         self.readonly =  readonly
         self.solset = solset
-        # create if required
-        H = h5parm(self.filename, readonly=False)
-        if self.solset not in H.getSolsetNames():
-            #adds the antenna, directions tables
-            H.makeSolset(solsetName=self.solset,addTables=True)
-        H.close()
         self.H = None
         self._contexts_open = 0
         self._selection = None        
@@ -61,7 +55,57 @@ class DataPack(object):
                 return
             self._solset.getSoltab(soltab).delete()
 
-    def switch_solset(self,solset,array_file=None,directions=None,patch_names=None):
+    def split_solset(self, solset, filename, soltabs=None, new_solset=None, clobber=False):
+        """Split off a solset and requested soltabs into a new file.
+        :param solset: str the name of the solset to split off
+        :param filename: str the nanme of the new file to split into.
+        :param soltabs: List(str) the names of soltabs to put into the new file.
+            If None (default) then puts all soltabs.
+        :param new_solset: str the name of the new solset. None (default) means same as `solset`.
+        :param clobber: bool, whether to overwrite `filename`.
+        Raises:
+        IOError if `filename` exists, and `clobber` not True
+        ValueError if `solset` is None
+        """
+        filename = os.path.abspath(filename)
+        if os.path.exists(filename):
+            if not clobber:
+                raise IOError("{} already exists and clobber False".format(filename))
+            logging.info("Overwriting {}".format(filename))
+            os.unlink(filename)
+        with self:
+            self.switch_solset(solset)
+            soltabs = soltabs or self.soltabs
+            patch_names, directions = self.sources
+            antenna_labels, antennas = self.antennas
+        if solset is None:
+            raise ValueError("solset cannot be None")
+        new_solset = new_solset or solset
+
+        new_datapack = DataPack(filename,readonly=False,solset=new_solset)
+        with new_datapack:
+            new_datapack.switch_solset(new_solset, antenna_labels=antenna_labels, antennas=antennas, directions=directions, patch_names=patch_names)
+            with self:
+                for soltab in soltabs:
+                    if soltab not in self.allowed_soltabs:
+                        logging.info("Skipping {}".format(soltab))
+                        continue
+                    vals, axes = getattr(self,soltab)
+                    weights, _ = getattr(self,"weights_{}".format(soltab))
+
+                    timestamps, times = self.get_times(axes['time'])
+                    pol_labels,pols = self.get_pols(axes['pol'])
+                    if 'freq' in axes.keys():
+                        _,freqs = self.get_freqs(axes['freq'])
+                        new_datapack.add_freq_dep_tab(soltab, times.mjd*86400., ants=axes['ant'], dirs=axes['dir'], pols = pol_labels, freqs=freqs)
+                    else:
+                        new_datapack.add_freq_indep_tab(soltab, times.mjd*86400., ants=axes['ant'], dirs=axes['dir'] , pols = pol_labels)
+                    setattr(new_datapack,soltab, vals)
+                    setattr(new_datapack,"weights_{}".format(soltab), weights)
+                    
+
+
+    def switch_solset(self,solset,antenna_labels=None, antennas=None, array_file=None,directions=None,patch_names=None):
         """
         returns 
         True if already existed
@@ -77,7 +121,7 @@ class DataPack(object):
                 if directions is not None:
                     self.add_sources(directions,patch_names=patch_names)
                 if array_file is not None:
-                    self.add_antennas(array_file=array_file)
+                    self.add_antennas(labels=antenna_labels, pos=antennas, array_file=array_file)
                 return False
             else:
                 return True
@@ -95,6 +139,15 @@ class DataPack(object):
                 self.H.close()
                 self.H = None
             self._contexts_open -= 1
+    @property
+    def solsets(self):
+        with self:
+            return self.H.getSolsetNames()
+
+    @property
+    def soltabs(self):
+        with self:
+            return self._solset.getSoltabNames()
 
     def __repr__(self):
 
@@ -130,7 +183,10 @@ class DataPack(object):
     @property
     def _solset(self):
         with self:
-            return self.H.getSolset(self.solset)
+            try:
+                return self.H.getSolset(self.solset)
+            except:
+                raise ValueError("solset {} does not exist".format(self.solset))
 
     def _load_array_file(self,array_file):
         '''Loads a csv where each row is x,y,z in geocentric ITRS coords of the antennas'''
@@ -172,10 +228,19 @@ class DataPack(object):
                     f.write('\n')
                 i += 1
 
-    def add_antennas(self, array_file = None):
-        if array_file is None:
-            array_file = self.lofar_array
-        labels, pos = self._load_array_file(array_file)
+    def add_antennas(self, labels=None, pos = None, array_file = None):
+        """Adds antennas to the datapack solset.
+        :param labels: array of string of station names
+        :param pos: array of positions in ITRF(m) frame of station positions
+        :param array_file: array_file to load relevant data if labels and pos are None
+        """
+        if labels is None and pos is None:
+            if array_file is None:
+                array_file = self.lofar_array
+            labels, pos = self._load_array_file(array_file)
+        labels = np.array(labels)
+        pos = np.array(pos)
+
         with self:
             antennaTable = self._solset.obj._f_get_child('antenna')
             for lab,p in zip(labels,pos):
